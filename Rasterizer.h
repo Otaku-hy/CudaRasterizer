@@ -14,9 +14,8 @@
 void InitializeCudaRasterizer(int width, int height);
 void CleanupCudaRasterizer();
 
-void Rasterize(cudaSurfaceObject_t outRenderTarget, float* depthBuffer,
+void Rasterize(unsigned char* outRenderTarget, float* depthBuffer,
 	const VertexVSIn* vertexStream, const uint32_t* indexStream,
-	int indexCount);
+	int indexCount, int vertexCount, MatricesCBuffer* cb);
 
-void RasterizerUpdateObjectsBuffer(int vertexCount, int primitiveCount);
-
+void RasterizerUpdateObjectsBuffer(int indexCountPerPrimitive, int vertexCount, int indexCount);

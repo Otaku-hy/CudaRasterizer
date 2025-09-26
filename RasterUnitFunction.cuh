@@ -5,15 +5,15 @@
 
 __device__ float atomicMinFloat(float* address, float value)
 {
-	float old = *address, assumed;
 	unsigned int* address_as_ui = (unsigned int*)address;
+	float ret = *address;
+	while (value < ret)
+	{
+		float assume = ret;
+		ret = __uint_as_float(atomicCAS(address_as_ui, __float_as_uint(assume), __float_as_uint(value)));
+	}
 
-	do {
-		assumed = old;
-		old = __uint_as_float(atomicCAS(address_as_ui, __float_as_uint(assumed), __float_as_uint(value)));
-	} while (old > value);
-
-	return old;
+	return ret;
 }
 
 
