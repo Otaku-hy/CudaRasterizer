@@ -19,6 +19,7 @@
 #include "Rasterizer.h" 
 #include "Camera.h"
 
+#include "ParallelAlgorithm.h"
 
 namespace
 {
@@ -96,7 +97,7 @@ int main()
 	}
 	catch (const std::exception& e)
 	{
-		MessageBoxA(nullptr, e.what(), "Unhandled Exception", MB_OK | MB_ICONERROR);
+		OutputDebugStringA(e.what());
 		Cleanup();
 		CleanupCudaRasterizer();
 		return -1;
@@ -176,7 +177,12 @@ void Initialize()
 void LoadAssets()
 {
 	objl::Loader objLoader;
-	objLoader.LoadFile("./objs/cube.obj");
+	objLoader.LoadFile("./objs/cow.obj");
+	//std::vector<VertexVSIn> rasterVertices = {
+	//	{ glm::vec4{-0.1f, -0.1f, 0.5f, 1.0f} },
+	//	{ glm::vec4{0.0f, 0.1f, 0.5f, 1.0f} },
+	//	{ glm::vec4{0.1f, -0.1f, 0.5f, 1.0f} }
+	//}; ;
 	std::vector<VertexVSIn> rasterVertices;
 	std::vector<unsigned int> rasterIndices;
 	LoadObjToRasterStruct(objLoader.LoadedVertices, rasterVertices);
@@ -185,19 +191,19 @@ void LoadAssets()
 	gVertexCount = static_cast<uint32_t>(rasterVertices.size());
 	gIndexCount = static_cast<uint32_t>(rasterIndices.size());
 
-	gpCamera = std::make_unique<Camera>(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
+	gpCamera = std::make_unique<Camera>(glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
 
 	CUDA_CHECK(cudaMalloc((void**)&gpCudaDepthStencil, sizeof(float) * width * height));
 
 	VertexVSIn vertices[] =
 	{
-		{ glm::vec4{-0.5f, -0.5f, 0.5f, 1.0f} },
-		{ glm::vec4{0.0f, 0.5f, 0.5f, 1.0f} },
-		{ glm::vec4{0.5f, -0.5f, 0.5f, 1.0f} }
+		{ glm::vec4{-0.1f, -0.1f, 0.5f, 1.0f} },
+		{ glm::vec4{0.0f, 0.1f, 0.5f, 1.0f} },
+		{ glm::vec4{0.1f, -0.1f, 0.5f, 1.0f} }
 	};
-	uint32_t indices[] = { 0,1,2 };
+	uint32_t indices[] = { 0,2,1 };
 
-	RasterizerUpdateObjectsBuffer(3, 3, 3);
+	RasterizerUpdateObjectsBuffer(3, gVertexCount, gIndexCount);
 
 	CUDA_CHECK(cudaMalloc((void**)&gpInVertexStream, sizeof(VertexVSIn) * rasterVertices.size()));
 	CUDA_CHECK(cudaMemcpy((void*)gpInVertexStream, rasterVertices.data(), sizeof(VertexVSIn) * rasterVertices.size(), cudaMemcpyHostToDevice));
@@ -208,6 +214,7 @@ void LoadAssets()
 
 void RenderLoop()
 {
+	//while (!glfwWindowShouldClose(gpWindow))
 	while (!glfwWindowShouldClose(gpWindow))
 	{
 		float currentFrameTime = static_cast<float>(glfwGetTime());
@@ -221,6 +228,8 @@ void RenderLoop()
 
 		glfwSwapBuffers(gpWindow);
 		glfwPollEvents();
+
+		//break;
 	}
 }
 

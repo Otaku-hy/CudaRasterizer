@@ -22,6 +22,7 @@ struct MatricesCBuffer		//
 struct Primitive
 {
 	VertexVSOut v[3];
+	int primitiveID;
 };
 
 struct FragmentPSin

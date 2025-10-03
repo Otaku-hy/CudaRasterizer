@@ -12,20 +12,12 @@ inline void ThrowIfFailed(HRESULT hr, const char* funcCall, const char* file, in
 {
 	if (FAILED(hr))
 	{
-		try
-		{
-			_com_error err(hr);
+		_com_error err(hr);
 
-			std::ostringstream oss;
-			oss << "Error at " << file << ":" << line << " - " << funcCall << " failed with HRESULT: " << err.ErrorMessage();
-			//fprintf(stderr, "%s\n", oss.str().c_str());
-			throw std::runtime_error(oss.str());
-		}
-		catch (const std::exception& e)
-		{
-			std::cout << e.what();
-		}
-
+		std::ostringstream oss;
+		oss << "Error at " << file << ":" << line << " - " << funcCall << " failed with HRESULT: " << err.ErrorMessage();
+		//fprintf(stderr, "%s\n", oss.str().c_str());
+		throw std::runtime_error(oss.str());
 	}
 }
 
@@ -37,7 +29,7 @@ inline void CheckCudaError(cudaError_t err, const char* funcCall, const char* fi
 		oss << "CUDA Error at " << file << ":" << line << " - " << funcCall << " failed with:  " << cudaGetErrorString(err);
 		//fprintf(stderr, "%s\n", oss.str().c_str());
 		//exit(EXIT_FAILURE);
-		//OutputDebugStringA(oss.str().c_str());
+		OutputDebugStringA(oss.str().c_str());
 		throw std::runtime_error(oss.str());
 	}
 }

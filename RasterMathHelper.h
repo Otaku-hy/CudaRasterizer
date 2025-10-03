@@ -3,6 +3,8 @@
 
 #include "glm/glm/glm.hpp"
 
+static constexpr int MAX_VERTEX_CLIP_COUNT = 16;
+
 template<typename T>
 struct is_glm_vec : std::false_type {};
 
@@ -44,6 +46,44 @@ inline __host__ __device__ glm::vec3 ComputeBarycentric2D(const glm::vec2 p, con
 	float s1 = (v2.y - v0.y) * p.x + (v0.x - v2.x) * p.y + v2.x * v0.y - v0.x * v2.y;
 
 	return { s0 * invS, s1 * invS, 1 - (s0 + s1) * invS };
+}
+
+inline __device__ bool InsideViewFrustumCS(const glm::vec4& positionCS)
+{
+	return positionCS.x >= -positionCS.w && positionCS.x <= positionCS.w &&
+		positionCS.y >= -positionCS.w && positionCS.y <= positionCS.w &&
+		positionCS.z >= 0.0f && positionCS.z <= positionCS.w;
+}
+
+inline __device__ VertexVSOut InterpolatingClippingPos(float t, VertexVSOut  vStart, VertexVSOut vEnd)
+{
+	VertexVSOut vResult;
+	vResult.sv_position = glm::mix(vStart.sv_position, vEnd.sv_position, t); //lerp
+	return vResult;
+}
+
+inline __device__ int ClippingWithPlane(const glm::vec4 faceEquation, const int numVertices, const VertexVSOut* inVertices, VertexVSOut* outVertices)
+{
+	glm::vec4 prevPos = inVertices[numVertices - 1].sv_position;
+	VertexVSOut prevVertex = inVertices[numVertices - 1];
+	int outVertexCount = 0;
+
+	for (int i = 0; i < numVertices; i++)
+	{
+		glm::vec4 currPos = inVertices[i].sv_position;
+		float disCurrPos = glm::dot(faceEquation, currPos);
+		float disPrevPos = glm::dot(faceEquation, prevPos);
+
+		float t = disPrevPos / (disPrevPos - disCurrPos);
+		if ((disCurrPos > 0.0f) != (disPrevPos > 0.0f))
+			outVertices[outVertexCount++] = InterpolatingClippingPos(t, prevVertex, inVertices[i]);
+		if (disCurrPos >= 0.0f) outVertices[outVertexCount++] = inVertices[i];
+
+		prevPos = currPos;
+		prevVertex = inVertices[i];
+	}
+
+	return outVertexCount;
 }
 
 #endif // !RASTER_MATH_HELPER

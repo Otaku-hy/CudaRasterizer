@@ -3,7 +3,7 @@
 
 #include <cuda_runtime.h>
 
-__device__ float atomicMinFloat(float* address, float value)
+inline __device__ float atomicMinFloat(float* address, float value)
 {
 	unsigned int* address_as_ui = (unsigned int*)address;
 	float ret = *address;
@@ -16,6 +16,10 @@ __device__ float atomicMinFloat(float* address, float value)
 	return ret;
 }
 
-
-
+inline __device__ unsigned int get_lane_id()
+{
+	unsigned int ret;
+	asm("mov.u32 %0, %laneid;" : "=r"(ret));
+	return ret;
+}
 #endif // !RASTER_FUNC

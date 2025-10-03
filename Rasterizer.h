@@ -9,6 +9,7 @@
 
 #include "RasterPipeHelper.h"
 #include "RasterMathHelper.h"
+#include "RasterParallelAlgorithm.h"
 #include "ErrorCheck.h"
 
 void InitializeCudaRasterizer(int width, int height);
