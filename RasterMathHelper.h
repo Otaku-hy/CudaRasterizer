@@ -32,9 +32,29 @@ inline __host__ __device__ AABB<T> ComputeTriangleBoundingBox(const T v0, const 
 
 template<typename T>
 	requires(is_glm_vec<T>::value)
-inline __host__ __device__ bool Intersected(const AABB<T> a, const AABB<T> b)
+inline __host__ __device__ bool IsIntersected(const AABB<T> a, const AABB<T> b)
 {
 	return glm::all((a.min <= b.max) && (a.max >= b.min));
+}
+
+template<typename T>
+	requires(is_glm_vec<T>::value)
+inline __host__ __device__ AABB<T> Intersect(const AABB<T> a, const AABB<T> b)
+{
+	AABB<T> result;
+	result.min = glm::max(a.min, b.min);
+	result.max = glm::min(a.max, b.max);
+	return result;
+}
+
+template<typename T>
+	requires(is_glm_vec<T>::value)
+inline __host__ __device__ AABB<T> Union(const AABB<T> a, const AABB<T> b)
+{
+	AABB<T> result;
+	result.min = glm::min(a.min, b.min);
+	result.max = glm::max(a.max, b.max);
+	return result;
 }
 
 inline __host__ __device__ glm::vec3 ComputeBarycentric2D(const glm::vec2 p, const glm::vec2 v0, const glm::vec2 v1, const glm::vec2 v2)

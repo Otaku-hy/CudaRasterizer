@@ -1,5 +1,4 @@
 ﻿#include "Rasterizer.h"
-
 #include "RasterUnitFunction.cuh"
 
 
@@ -191,7 +190,28 @@ __global__ void Rasterization(int dimension, const Primitive* primitiveStream, F
 	}
 }
 
-__global__ void PrimitiveBinning();
+__global__ void PrimitiveBinning(int size, Primitive* primitiveStream)
+{
+	/// ? why need this
+	__shared__ unsigned int binIntesectMask[BINNING_BLOCK_SIZE][BIN_MAX_COUNT >> 5 + 1];
+
+
+	__shared__ unsigned int binTriangleCount[BIN_MAX_COUNT];
+
+	int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	if (idx >= size) return;
+
+	Primitive prim = primitiveStream[idx];
+	AABB<glm::vec2> boundingBox = ComputeTriangleBoundingBox(glm::vec2(prim.v[0].sv_position), glm::vec2(prim.v[1].sv_position), glm::vec2(prim.v[2].sv_position));
+	
+	unsigned int intersectMask[BIN_MAX_COUNT >> 5];
+	for (int i = 0; i < (BIN_MAX_COUNT >> 5); i++) intersectMask[i] = 0;
+
+	unsigned int lox = 
+	
+
+	//
+}
 
 __global__ void PixelShader(int dimension, FragmentPSin* fragmentStream, glm::vec4* renderTarget, int width, int height)
 {
