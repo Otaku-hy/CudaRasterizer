@@ -8,6 +8,8 @@
 #include "RasterPipeHelper.h"
 #include "ErrorCheck.h"
 
+#define NOMINMAX
+
 void InitCompactionEnvironment();
 
 int  PrimitiveCompaction(int size, const Primitive* inputStream, Primitive* outputStream);

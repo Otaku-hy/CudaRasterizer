@@ -33,7 +33,7 @@ private:
 	float mZNear;
 	float mZFar;
 
-	float cameraMoveSpeed = 1.0f;
+	float cameraMoveSpeed = 0.25f;
 	float cameraRotateSpeed = 0.01f;
 };
 

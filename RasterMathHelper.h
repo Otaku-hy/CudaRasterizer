@@ -3,6 +3,8 @@
 
 #include "glm/glm/glm.hpp"
 
+#define UPPER_BOUND(x,n) ( ( (x) + ( (1<<(n)) -1) ) & ~( (1<<(n)) -1))
+
 static constexpr int MAX_VERTEX_CLIP_COUNT = 16;
 
 template<typename T>
@@ -57,6 +59,21 @@ inline __host__ __device__ AABB<T> Union(const AABB<T> a, const AABB<T> b)
 	return result;
 }
 
+
+inline __host__ __device__ glm::vec4 Intersect(const glm::vec4 a, const glm::vec4 b)
+{
+	float rx = a.x > b.x ? a.x : b.x;
+	float ry = a.y > b.y ? a.y : b.y;
+	float rz = a.z < b.z ? a.z : b.z;
+	float rw = a.w < b.w ? a.w : b.w;
+
+	//float rx = glm::max(a.x, b.x);
+	//float ry = glm::max(a.y, b.y);
+	//float rz = glm::min(a.z, b.z);
+	//float rw = glm::min(a.w, b.w);
+	return glm::vec4(rx, ry, rz, rw);
+}
+
 inline __host__ __device__ glm::vec3 ComputeBarycentric2D(const glm::vec2 p, const glm::vec2 v0, const glm::vec2 v1, const glm::vec2 v2)
 {
 	float s = (v1.y - v2.y) * v0.x + (v2.x - v1.x) * v0.y + v1.x * v2.y - v2.x * v1.y;
@@ -104,6 +121,18 @@ inline __device__ int ClippingWithPlane(const glm::vec4 faceEquation, const int 
 	}
 
 	return outVertexCount;
+}
+
+inline __device__ __host__ unsigned NormToUnsigned_24Bit(float val)
+{
+	const float max24Bit = 16777215.0f; // 2^24 -1
+	return static_cast<unsigned>(val * max24Bit);
+}
+
+inline __device__ __host__ float UnsignedToNorm_24Bit(unsigned val)
+{
+	const float invMax24Bit = 1.0f / 16777215.0f; // 1/(2^24 -1)
+	return static_cast<float>(val) * invMax24Bit;
 }
 
 #endif // !RASTER_MATH_HELPER

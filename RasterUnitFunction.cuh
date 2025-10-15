@@ -22,4 +22,9 @@ inline __device__ unsigned int get_lane_id()
 	asm("mov.u32 %0, %laneid;" : "=r"(ret));
 	return ret;
 }
+
+inline __device__ bool InBuffer(int x, int y, int width, int height)
+{
+	return x >= 0 && x < width && y >= 0 && y < height;
+}
 #endif // !RASTER_FUNC

@@ -29,7 +29,7 @@ namespace
 
 	VertexVSIn* gpInVertexStream = nullptr;
 	uint32_t* gpIndexStream = nullptr;
-	float* gpCudaDepthStencil = nullptr;
+	unsigned* gpCudaDepthStencil = nullptr;
 	GLuint gRTBuffer;
 	GLuint gRTTexture;
 	uint32_t gIndexCount = 0;
@@ -183,6 +183,7 @@ void LoadAssets()
 	//	{ glm::vec4{0.0f, 0.1f, 0.5f, 1.0f} },
 	//	{ glm::vec4{0.1f, -0.1f, 0.5f, 1.0f} }
 	//}; ;
+	//std::vector<unsigned int> rasterIndices = { 0,2,1 };
 	std::vector<VertexVSIn> rasterVertices;
 	std::vector<unsigned int> rasterIndices;
 	LoadObjToRasterStruct(objLoader.LoadedVertices, rasterVertices);
@@ -191,9 +192,9 @@ void LoadAssets()
 	gVertexCount = static_cast<uint32_t>(rasterVertices.size());
 	gIndexCount = static_cast<uint32_t>(rasterIndices.size());
 
-	gpCamera = std::make_unique<Camera>(glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
+	gpCamera = std::make_unique<Camera>(glm::vec3(0.0f, 0.0f, 0.37f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
 
-	CUDA_CHECK(cudaMalloc((void**)&gpCudaDepthStencil, sizeof(float) * width * height));
+	CUDA_CHECK(cudaMalloc((void**)&gpCudaDepthStencil, sizeof(unsigned) * width * height));
 
 	VertexVSIn vertices[] =
 	{

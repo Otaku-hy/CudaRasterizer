@@ -1,0 +1,27 @@
+#pragma once
+
+#define BINNING_STAGE_BLOCK_SIZE 256
+#define MAX_BIN_COUNT 256 // 128 x 128 pixel each bin
+#define BIN_PIXEL_SIZE 128
+#define BIN_PER_ROW 16
+
+#define BIN_PIXEL_SIZE_LOG2 7 // 2^7 = 128
+
+#define QUEUE_TRUNK_SIZE 256 //Byte
+#define QUEUE_TRUNK_SIZE_UINT (QUEUE_TRUNK_SIZE / 4)
+
+#define COARSE_RASTER_BLOCK_SIZE 256
+#define MAX_TILE_COUNT 256
+#define TILE_PIXEL_SIZE 8
+#define TILE_PER_ROW ( (BIN_PIXEL_SIZE) / (TILE_PIXEL_SIZE) )
+
+#define TILE_PIXEL_SIZE_LOG2 3 // 2^3 = 8
+
+#define TILE_QUEUE_TRUNK_SIZE_UINT 512 // 2KB
+#define TILE_QUEUE_TRUNK_SIZE (TILE_QUEUE_TRUNK_SIZE_UINT * 4)
+
+#define TILE_QUEUE_ENTRY 4 // per tile
+
+#define FINE_RASTER_BLOCK_SIZE 32
+
+#define AVERAGE_OVERDRAW 4 // 4x overdraw per pixel on average
