@@ -23,5 +23,10 @@
 #define TILE_QUEUE_ENTRY 4 // per tile
 
 #define FINE_RASTER_BLOCK_SIZE 32
+#define FINE_RASTER_PER_TILING_WORK_THREAD 32
+#define FINE_RASTER_TILE_PER_BLOCK 4
 
+#define AVERAGE_PRIMITIVE_CULLED_COUNT 4
 #define AVERAGE_OVERDRAW 4 // 4x overdraw per pixel on average
+#define AVERAGE_TRIANGLE_PER_TILE 512 // assume 1 full trunk
+#define MAX_BINNING_WAVE 2046 

@@ -55,6 +55,8 @@ inline void LoadObjToRasterStruct(const std::vector<objl::Vertex>& inVertexStrea
     outVertexStream.resize(inVertexStream.size());
     for (size_t i = 0; i < inVertexStream.size(); ++i) {
         outVertexStream[i].position = glm::vec4(inVertexStream[i].Position.X, inVertexStream[i].Position.Y, inVertexStream[i].Position.Z, 1.0f);
+		outVertexStream[i].normal = glm::vec3(inVertexStream[i].Normal.X, inVertexStream[i].Normal.Y, inVertexStream[i].Normal.Z);
+		outVertexStream[i].uv = glm::vec2(inVertexStream[i].TextureCoordinate.X, inVertexStream[i].TextureCoordinate.Y);
 	}
 }
 

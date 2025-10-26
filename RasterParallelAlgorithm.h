@@ -12,6 +12,6 @@
 
 void InitCompactionEnvironment();
 
-int  PrimitiveCompaction(int size, const Primitive* inputStream, Primitive* outputStream);
+void  PrimitiveCompaction(int size, const Primitive* inputStream, Primitive* outputStream, unsigned int* sum, cudaStream_t stream);
 
 void DestroyCompactionEnvironment();

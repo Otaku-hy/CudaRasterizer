@@ -6,7 +6,8 @@ namespace cg = cooperative_groups;
 
 namespace
 {
-	unsigned int* dBlockSumBuffer; // warp sum buffer used in inter-block scan, set to 1024 as default
+	unsigned int* dBlockSumBuffer = nullptr; // warp sum buffer used in inter-block scan, set to 1024 as default
+	unsigned int* dSum = nullptr;
 
 	constexpr int blockSize = 256;
 }
@@ -16,7 +17,7 @@ namespace
 // suggest block size 256 -> can compact ~ 500 thousands primitives
 __global__ void PrimitiveCompactionKernel(int size, const Primitive* inputStream, Primitive* outputStream, unsigned int* gBlockScanBuffer , unsigned int* sum)
 {
-	extern __shared__ unsigned int sWarpScanBuffer[];
+	__shared__ unsigned int sWarpScanBuffer[32];
 	const unsigned int leaderLane = 0;
 
 	cg::grid_group grid = cg::this_grid();
@@ -32,6 +33,12 @@ __global__ void PrimitiveCompactionKernel(int size, const Primitive* inputStream
 	unsigned int offsetInWarp = __popc(ballotMask & lowerBits );
 
 	unsigned int totalValidInWarp = __popc(ballotMask);
+
+	if (threadIdx.x < 32)
+	{
+		sWarpScanBuffer[threadIdx.x] = 0;
+	}
+	__syncthreads();
 
 	if (lane_id == leaderLane)
 	{
@@ -54,10 +61,16 @@ __global__ void PrimitiveCompactionKernel(int size, const Primitive* inputStream
 
 	if(blockIdx.x == 0) // the second pass only use the first block with every thread read uint4 vector to reduce
 	{
+		if (threadIdx.x < 32) sWarpScanBuffer[threadIdx.x] = 0;
+		__syncthreads();
 		uint4 idata = ((uint4*)gBlockScanBuffer)[threadIdx.x];
 		uint4 odata = ScanInBlock4Exclusive(idata, sWarpScanBuffer);
 		((uint4*)gBlockScanBuffer)[threadIdx.x] = odata;
-		*sum = gBlockScanBuffer[1023];
+		__syncthreads();
+		if (threadIdx.x == 0)
+		{
+			*sum = gBlockScanBuffer[1023];
+		}
 	}
 	__syncthreads();
 
@@ -74,29 +87,22 @@ __global__ void PrimitiveCompactionKernel(int size, const Primitive* inputStream
 void InitCompactionEnvironment()
 {
 	cudaMalloc((void**)&dBlockSumBuffer, sizeof(unsigned int) * 1024);
+	CUDA_CHECK(cudaMalloc((void**)&dSum, sizeof(unsigned int)));
 }
 
-int  PrimitiveCompaction(int size, const Primitive* inputStream, Primitive* outputStream)
+void  PrimitiveCompaction(int size, const Primitive* inputStream, Primitive* outputStream, unsigned int* sum, cudaStream_t stream)
 {
 	int numBlocks = (size + blockSize - 1) / blockSize;
-	CUDA_CHECK(cudaMemset(dBlockSumBuffer, 0, sizeof(unsigned int) * 1024));
-
-	unsigned int* dSum = nullptr;
-	unsigned int sum;
-	CUDA_CHECK(cudaMalloc((void**)&dSum, sizeof(unsigned int)));
-
+	CUDA_CHECK(cudaMemsetAsync(dBlockSumBuffer, 0, sizeof(unsigned int) * 1024, stream));
+	CUDA_CHECK(cudaMemsetAsync(dSum, 0, sizeof(unsigned int), stream));
+	
 	void* args[] = { &size, &inputStream, &outputStream, &dBlockSumBuffer, &dSum };
-	cudaLaunchCooperativeKernel(PrimitiveCompactionKernel,numBlocks, blockSize, args, std::max(blockSize / 32u, 32u) * sizeof(unsigned int),0);
-
-	CUDA_CHECK(cudaMemcpy(&sum, dSum, sizeof(unsigned int), cudaMemcpyDeviceToHost));
-	CUDA_CHECK(cudaDeviceSynchronize());
-
-	cudaFree(dSum);
-
-	return sum;
+	cudaLaunchCooperativeKernel(PrimitiveCompactionKernel,numBlocks, blockSize, args, std::max(blockSize / 32u, 32u) * sizeof(unsigned int),stream);
+	CUDA_CHECK(cudaMemcpyAsync(sum, dSum, sizeof(unsigned int), cudaMemcpyDeviceToDevice, stream));
 }
 
 void DestroyCompactionEnvironment()
 {
-	cudaFree(dBlockSumBuffer);
+	CUDA_CHECK(cudaFree(dBlockSumBuffer));
+	CUDA_CHECK(cudaFree(dSum));
 }

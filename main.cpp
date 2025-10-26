@@ -13,14 +13,19 @@
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image.h"
+#include "stb_image_resize2.h"
+
 #include "ErrorCheck.h"
 #include "ObjLoader.h"
 #include "glUtility.h"
-#include "Rasterizer.h" 
+#include "Rasterizer.h"
+#include "RasterizerGraph.h"
 #include "Camera.h"
 
 #include "ParallelAlgorithm.h"
-
 namespace
 {
 	// Global variables from your project
@@ -50,6 +55,8 @@ namespace
 	float yPos;
 
 	std::unique_ptr<Camera> gpCamera;
+	Texture2D gTexture;
+	MatricesCBuffer gMatricesCB;
 }
 
 // Function Prototypes
@@ -92,7 +99,11 @@ int main()
 	{
 		Initialize();
 		InitializeCudaRasterizer(width, height);
+		InitializeCudaGraph();
 		LoadAssets();
+		BuildPipeline(gRTBuffer, gpCudaDepthStencil,
+			gpInVertexStream, gpIndexStream,
+			gIndexCount, gVertexCount, &gMatricesCB, gTexture);
 		RenderLoop();
 	}
 	catch (const std::exception& e)
@@ -100,11 +111,13 @@ int main()
 		OutputDebugStringA(e.what());
 		Cleanup();
 		CleanupCudaRasterizer();
+		CleanupCudaGraph();
 		return -1;
 	}
 
 	Cleanup();
 	CleanupCudaRasterizer();
+	CleanupCudaGraph();
 	return 0;
 }
 
@@ -177,13 +190,14 @@ void Initialize()
 void LoadAssets()
 {
 	objl::Loader objLoader;
-	objLoader.LoadFile("./objs/cow.obj");
+	objLoader.LoadFile("./objs/bunny.obj");
 	//std::vector<VertexVSIn> rasterVertices = {
-	//	{ glm::vec4{-0.1f, -0.1f, 0.5f, 1.0f} },
-	//	{ glm::vec4{0.0f, 0.1f, 0.5f, 1.0f} },
-	//	{ glm::vec4{0.1f, -0.1f, 0.5f, 1.0f} }
+	//	{ glm::vec4{-0.1f, -0.1f, 0.1f, 1.0f}, glm::vec3(0,0,1), glm::vec2(0,0)},
+	//	{ glm::vec4{-0.1f, 0.1f, 0.1f, 1.0f}, glm::vec3(0,0,1), glm::vec2(0,1)},
+	//	{ glm::vec4{0.1f, -0.1f, 0.1f, 1.0f}, glm::vec3(0,0,1), glm::vec2(1,0)},
+	//	{ glm::vec4{0.1,0.1,0.1f,1.0f}, glm::vec3(0,0,1), glm::vec2(1,1) }
 	//}; ;
-	//std::vector<unsigned int> rasterIndices = { 0,2,1 };
+	//std::vector<unsigned int> rasterIndices = { 0,2,3, 0,3,1 };
 	std::vector<VertexVSIn> rasterVertices;
 	std::vector<unsigned int> rasterIndices;
 	LoadObjToRasterStruct(objLoader.LoadedVertices, rasterVertices);
@@ -192,17 +206,9 @@ void LoadAssets()
 	gVertexCount = static_cast<uint32_t>(rasterVertices.size());
 	gIndexCount = static_cast<uint32_t>(rasterIndices.size());
 
-	gpCamera = std::make_unique<Camera>(glm::vec3(0.0f, 0.0f, 0.37f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
+	gpCamera = std::make_unique<Camera>(glm::vec3(0.0f, 0.0f, 0.45f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
 
 	CUDA_CHECK(cudaMalloc((void**)&gpCudaDepthStencil, sizeof(unsigned) * width * height));
-
-	VertexVSIn vertices[] =
-	{
-		{ glm::vec4{-0.1f, -0.1f, 0.5f, 1.0f} },
-		{ glm::vec4{0.0f, 0.1f, 0.5f, 1.0f} },
-		{ glm::vec4{0.1f, -0.1f, 0.5f, 1.0f} }
-	};
-	uint32_t indices[] = { 0,2,1 };
 
 	RasterizerUpdateObjectsBuffer(3, gVertexCount, gIndexCount);
 
@@ -210,6 +216,42 @@ void LoadAssets()
 	CUDA_CHECK(cudaMemcpy((void*)gpInVertexStream, rasterVertices.data(), sizeof(VertexVSIn) * rasterVertices.size(), cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMalloc((void**)&gpIndexStream, sizeof(unsigned int) * rasterIndices.size()));
 	CUDA_CHECK(cudaMemcpy((void*)gpIndexStream, rasterIndices.data(), sizeof(unsigned int) * rasterIndices.size(), cudaMemcpyHostToDevice));
+
+	std::vector<std::vector<unsigned char>> textureData(4);
+
+	unsigned char* imgData = stbi_load("./textures/bunny_diffuse.png", &gTexture.width, &gTexture.height, nullptr, 4);
+	textureData[0].assign(imgData, imgData + (gTexture.width * gTexture.height * 4));
+	stbi_image_free(imgData);
+
+	textureData[1].resize((gTexture.width >> 1) * (gTexture.height >> 1) * 4);
+	textureData[2].resize((gTexture.width >> 2) * (gTexture.height >> 2) * 4);
+	textureData[3].resize((gTexture.width >> 3) * (gTexture.height >> 3) * 4);
+
+	stbir_resize_uint8_srgb(textureData[0].data(), gTexture.width, gTexture.height, 0,
+		textureData[1].data(), gTexture.width >> 1, gTexture.height >> 1, 0, STBIR_RGBA);
+	stbir_resize_uint8_srgb(textureData[1].data(), gTexture.width >> 1, gTexture.height >> 1, 0,
+		textureData[2].data(), gTexture.width >> 2, gTexture.height >> 2, 0, STBIR_RGBA);
+	stbir_resize_uint8_srgb(textureData[2].data(), gTexture.width >> 2, gTexture.height >> 2, 0,
+		textureData[3].data(), gTexture.width >> 3, gTexture.height >> 3, 0, STBIR_RGBA);
+
+	unsigned int size = gTexture.width * gTexture.height * 4 +
+		(gTexture.width >> 1) * (gTexture.height >> 1) * 4 +
+		(gTexture.width >> 2) * (gTexture.height >> 2) * 4 +
+		(gTexture.width >> 3) * (gTexture.height >> 3) * 4;
+	CUDA_CHECK(cudaMalloc((void**)&gTexture.data, sizeof(unsigned char) * size));
+	//CUDA_CHECK(cudaMalloc((void**)&gTexture.data[1], sizeof(unsigned char) * (gTexture.width >> 1) * (gTexture.height >> 1) * 4));
+	//CUDA_CHECK(cudaMalloc((void**)&gTexture.data[2], sizeof(unsigned char) * (gTexture.width >> 2) * (gTexture.height >> 2) * 4));
+	//CUDA_CHECK(cudaMalloc((void**)&gTexture.data[3], sizeof(unsigned char) * (gTexture.width >> 3) * (gTexture.height >> 3) * 4));
+
+	CUDA_CHECK(cudaMemcpy(&(gTexture.data[0]), textureData[0].data(), sizeof(unsigned char) * gTexture.width * gTexture.height * 4, cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(&(gTexture.data[gTexture.width * gTexture.height * 4]), 
+		textureData[1].data(), sizeof(unsigned char) * (gTexture.width >> 1) * (gTexture.height >> 1) * 4, cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(&(gTexture.data[gTexture.width * gTexture.height * 4 + (gTexture.width >> 1) * (gTexture.height >> 1) * 4]), 
+		textureData[2].data(), sizeof(unsigned char) * (gTexture.width >> 2) * (gTexture.height >> 2) * 4, cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(&(gTexture.data[gTexture.width * gTexture.height * 4 +
+		(gTexture.width >> 1) * (gTexture.height >> 1) * 4 + (gTexture.width >> 2) * (gTexture.height >> 2) * 4]), 
+		textureData[3].data(), sizeof(unsigned char) * (gTexture.width >> 3) * (gTexture.height >> 3) * 4, cudaMemcpyHostToDevice));
+	//cudaMemcpy is synchronous, so no need to cudaDeviceSynchronize here
 }
 
 
@@ -242,19 +284,20 @@ void Update()
 void Rendering()
 {
 	//begin pass
-	unsigned char* cudaMappedRT = nullptr;
-	CUDA_CHECK(cudaGLMapBufferObject((void**)&cudaMappedRT, gRTBuffer));
+	//unsigned char* cudaMappedRT = nullptr;
+	//CUDA_CHECK(cudaGLMapBufferObject((void**)&cudaMappedRT, gRTBuffer));
 
-	MatricesCBuffer cb;
 	glm::mat4 view = gpCamera->GetViewMatrix();
 	glm::mat4 proj = gpCamera->GetProjectionMatrix();
-	cb.mvp = proj * view; //column major
+	gMatricesCB.mvp = proj * view; //column major
 
-	//draw call with cuda rasterizer
-	Rasterize(cudaMappedRT, gpCudaDepthStencil,
-		gpInVertexStream, gpIndexStream, gIndexCount, gVertexCount, &cb);
-	CUDA_CHECK(cudaDeviceSynchronize());
-	CUDA_CHECK(cudaGLUnmapBufferObject(gRTBuffer));
+	RasterizeWithGraph(gRTBuffer, gpCudaDepthStencil,
+		gpInVertexStream, gpIndexStream, gIndexCount, gVertexCount, &gMatricesCB, gTexture);
+
+	////draw call with cuda rasterizer
+	//Rasterize(cudaMappedRT, gpCudaDepthStencil,
+	//	gpInVertexStream, gpIndexStream, gIndexCount, gVertexCount, &gMatricesCB, gTexture);
+	//CUDA_CHECK(cudaGLUnmapBufferObject(gRTBuffer));
 
 	//end pass 
 	//copy to texture and render textured quad
@@ -292,6 +335,7 @@ void Cleanup()
 	cudaFree(gpCudaDepthStencil);
 	cudaFree(gpInVertexStream);
 	cudaFree(gpIndexStream);
+	cudaFree(gTexture.data);
 
 	glDeleteProgram(gShaderProgram);
 	glDeleteTextures(1, &gRTTexture);

@@ -21,6 +21,13 @@ void CleanupCudaRasterizer();
 
 void Rasterize(unsigned char* outRenderTarget, unsigned* depthBuffer,
 	const VertexVSIn* vertexStream, const uint32_t* indexStream,
-	int indexCount, int vertexCount, MatricesCBuffer* cb);
+	int indexCount, int vertexCount, MatricesCBuffer* cb, Texture2D tex);
 
 void RasterizerUpdateObjectsBuffer(int indexCountPerPrimitive, int vertexCount, int indexCount);
+
+// CUDA Graph optimized version
+//void InitializeCudaGraph();
+//void CleanupCudaGraph();
+//void RasterizeWithGraph(unsigned char* outRenderTarget, unsigned* depthBuffer,
+//	const VertexVSIn* vertexStream, const uint32_t* indexStream,
+//	int indexCount, int vertexCount, MatricesCBuffer* cb, Texture2D tex);

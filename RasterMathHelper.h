@@ -5,7 +5,7 @@
 
 #define UPPER_BOUND(x,n) ( ( (x) + ( (1<<(n)) -1) ) & ~( (1<<(n)) -1))
 
-static constexpr int MAX_VERTEX_CLIP_COUNT = 16;
+static constexpr int MAX_VERTEX_CLIP_COUNT = 12;
 
 template<typename T>
 struct is_glm_vec : std::false_type {};
@@ -96,6 +96,8 @@ inline __device__ VertexVSOut InterpolatingClippingPos(float t, VertexVSOut  vSt
 {
 	VertexVSOut vResult;
 	vResult.sv_position = glm::mix(vStart.sv_position, vEnd.sv_position, t); //lerp
+	vResult.normal = glm::mix(vStart.normal, vEnd.normal, t); //lerp
+	vResult.uv = glm::mix(vStart.uv, vEnd.uv, t); //lerp
 	return vResult;
 }
 
@@ -134,5 +136,7 @@ inline __device__ __host__ float UnsignedToNorm_24Bit(unsigned val)
 	const float invMax24Bit = 1.0f / 16777215.0f; // 1/(2^24 -1)
 	return static_cast<float>(val) * invMax24Bit;
 }
+
+
 
 #endif // !RASTER_MATH_HELPER
