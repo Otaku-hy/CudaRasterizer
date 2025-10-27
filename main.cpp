@@ -56,7 +56,7 @@ namespace
 
 	std::unique_ptr<Camera> gpCamera;
 	Texture2D gTexture;
-	MatricesCBuffer gMatricesCB;
+	MatricesCBuffer* gMatricesCB = nullptr;
 }
 
 // Function Prototypes
@@ -101,9 +101,9 @@ int main()
 		InitializeCudaRasterizer(width, height);
 		InitializeCudaGraph();
 		LoadAssets();
-		BuildPipeline(gRTBuffer, gpCudaDepthStencil,
+		BuildPipeline(nullptr, gpCudaDepthStencil,
 			gpInVertexStream, gpIndexStream,
-			gIndexCount, gVertexCount, &gMatricesCB, gTexture);
+			gIndexCount, gVertexCount, gMatricesCB, gTexture);
 		RenderLoop();
 	}
 	catch (const std::exception& e)
@@ -185,6 +185,8 @@ void Initialize()
 	glBindTexture(GL_TEXTURE_2D, 0);
 
 	glViewport(0, 0, width, height);
+
+	CUDA_CHECK(cudaMallocHost((void**)&gMatricesCB, sizeof(MatricesCBuffer)));
 }
 
 void LoadAssets()
@@ -289,10 +291,10 @@ void Rendering()
 
 	glm::mat4 view = gpCamera->GetViewMatrix();
 	glm::mat4 proj = gpCamera->GetProjectionMatrix();
-	gMatricesCB.mvp = proj * view; //column major
+	gMatricesCB->mvp = proj * view; //column major
 
 	RasterizeWithGraph(gRTBuffer, gpCudaDepthStencil,
-		gpInVertexStream, gpIndexStream, gIndexCount, gVertexCount, &gMatricesCB, gTexture);
+		gpInVertexStream, gpIndexStream, gIndexCount, gVertexCount, gMatricesCB, gTexture);
 
 	////draw call with cuda rasterizer
 	//Rasterize(cudaMappedRT, gpCudaDepthStencil,
@@ -336,6 +338,7 @@ void Cleanup()
 	cudaFree(gpInVertexStream);
 	cudaFree(gpIndexStream);
 	cudaFree(gTexture.data);
+	cudaFreeHost(gMatricesCB);
 
 	glDeleteProgram(gShaderProgram);
 	glDeleteTextures(1, &gRTTexture);

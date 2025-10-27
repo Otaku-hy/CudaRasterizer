@@ -6,7 +6,7 @@ void InitializeCudaGraph();
 
 void CleanupCudaGraph();
 
-void BuildPipeline(GLuint rtBuffer, unsigned* depthBuffer,
+void BuildPipeline(unsigned char* cudaMappedRT/*nullptr*/, unsigned* depthBuffer,
 	const VertexVSIn* vertexStream, const uint32_t* indexStream,
 	int indexCount, int vertexCount, MatricesCBuffer* cb, Texture2D tex);
 

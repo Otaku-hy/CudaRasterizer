@@ -1121,7 +1121,6 @@ void InitializeCudaRasterizer(int width, int height)
 	CUDA_CHECK(cudaMalloc((void**)&dTrunkAllocator, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMalloc((void**)&dTileTrunkAllocator, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMalloc((void**)&dQuadAllocator, sizeof(unsigned int)));
-	CUDA_CHECK(cudaMalloc((void**)&dBinSubQueueCounter, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMalloc((void**)&dPrimitiveCounter, sizeof(unsigned int)));
 
 	CUDA_CHECK(cudaMallocHost((void**)&hBinTrunkCount, sizeof(unsigned int)));
@@ -1174,7 +1173,6 @@ void CleanupCudaRasterizer()
 	CUDA_CHECK(cudaFree(dTrunkAllocator));
 	CUDA_CHECK(cudaFree(dTileTrunkAllocator));
 	CUDA_CHECK(cudaFree(dQuadAllocator));
-	CUDA_CHECK(cudaFree(dBinSubQueueCounter));
 	CUDA_CHECK(cudaFree(dPrimitiveCounter));
 
 	CUDA_CHECK(cudaFreeHost(hBinTrunkCount));

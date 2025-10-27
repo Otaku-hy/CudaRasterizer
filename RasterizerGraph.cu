@@ -30,6 +30,7 @@ namespace
 {
 	cudaStream_t workStreams[16];
 	cudaStream_t renderingStream;
+	cudaStream_t glStream;
 
 	cudaGraph_t renderGraph = nullptr;
 	cudaGraphExec_t graphInstance = nullptr;
@@ -43,10 +44,11 @@ void InitializeCudaGraph()
 {
 	for (int i = 0; i < 16; i++)
 	{
-		CUDA_CHECK(cudaStreamCreate(&workStreams[i]));
+		CUDA_CHECK(cudaStreamCreateWithFlags(&workStreams[i], cudaStreamNonBlocking));
 		CUDA_CHECK(cudaEventCreate(&events[i]));
 	}
-	CUDA_CHECK(cudaStreamCreate(&renderingStream));
+	CUDA_CHECK(cudaStreamCreateWithFlags(&renderingStream, cudaStreamNonBlocking));
+	CUDA_CHECK(cudaStreamCreateWithFlags(&glStream, cudaStreamNonBlocking));
 }
 
 void CleanupCudaGraph()
@@ -57,6 +59,7 @@ void CleanupCudaGraph()
 		CUDA_CHECK(cudaEventDestroy(events[i]));
 	}
 	CUDA_CHECK(cudaStreamDestroy(renderingStream));
+	CUDA_CHECK(cudaStreamDestroy(glStream));
 
 	if (renderGraph != nullptr)
 	{
@@ -74,36 +77,54 @@ void BeginFrame()
 {
 
 	// Reset allocators
-	cudaMemsetAsync(dTrunkAllocator, 0, sizeof(unsigned int), workStreams[2]);
-	cudaEventRecord(events[2], workStreams[2]);
-	cudaMemsetAsync(dTileTrunkAllocator, 0, sizeof(unsigned int), workStreams[3]);
-	cudaEventRecord(events[3], workStreams[3]);
-	cudaMemsetAsync(dQuadAllocator, 0, sizeof(unsigned int), workStreams[4]);
-	cudaEventRecord(events[4], workStreams[4]);
-	cudaMemsetAsync(dBinSubQueueCounter, 0, sizeof(unsigned int), workStreams[11]);
-	cudaEventRecord(events[11], workStreams[11]);
-	cudaMemcpyAsync(dSubTriangleCounter, hdcPrimitiveCount, sizeof(unsigned int), cudaMemcpyHostToDevice, workStreams[5]);
-	cudaEventRecord(events[5], workStreams[5]);
+	cudaStreamWaitEvent(workStreams[2], events[0], 0); // Wait for SetGraphicsRoot
+	CUDA_CHECK(cudaMemsetAsync(dTrunkAllocator, 0, sizeof(unsigned int), workStreams[2]));
+	CUDA_CHECK(cudaEventRecord(events[2], workStreams[2]));
+
+	cudaStreamWaitEvent(workStreams[3], events[0], 0); // Wait for SetGraphicsRoot
+	CUDA_CHECK(cudaMemsetAsync(dTileTrunkAllocator, 0, sizeof(unsigned int), workStreams[3]));
+	CUDA_CHECK(cudaEventRecord(events[3], workStreams[3]));
+
+	cudaStreamWaitEvent(workStreams[4], events[0], 0); // Wait for SetGraphicsRoot
+	CUDA_CHECK(cudaMemsetAsync(dQuadAllocator, 0, sizeof(unsigned int), workStreams[4]));
+	CUDA_CHECK(cudaEventRecord(events[4], workStreams[4]));
+
+	cudaStreamWaitEvent(workStreams[5], events[0], 0); // Wait for SetGraphicsRoot
+	CUDA_CHECK(cudaMemcpyAsync(dSubTriangleCounter, hdcPrimitiveCount, sizeof(unsigned int), cudaMemcpyHostToDevice, workStreams[5]));
+	CUDA_CHECK(cudaEventRecord(events[5], workStreams[5]));
 
 	// Clear depth buffer & render target & hiz
+	cudaStreamWaitEvent(workStreams[6], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dFragmentStream, 0, sizeof(FragmentPSin) * windowWidth * windowHeight * AVERAGE_OVERDRAW, workStreams[6]);
 	cudaEventRecord(events[6], workStreams[6]);
+
+	cudaStreamWaitEvent(workStreams[7], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dRenderTarget, 0, sizeof(float4) * windowHeight * windowWidth, workStreams[7]);
 	cudaEventRecord(events[7], workStreams[7]);
+	
+	cudaStreamWaitEvent(workStreams[8], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dHiZ, 0xFF, sizeof(unsigned) * MAX_BIN_COUNT * MAX_TILE_COUNT, workStreams[8]);
 	cudaEventRecord(events[8], workStreams[8]);
+
+	cudaStreamWaitEvent(workStreams[9], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dDepthBuffer, 0xFF, sizeof(unsigned int) * windowWidth * windowHeight, workStreams[9]);
 	cudaEventRecord(events[9], workStreams[9]);
 
 	// Clear inner buffers
+	cudaStreamWaitEvent(workStreams[10], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dPrimitiveStream, 0xFF, sizeof(Primitive) * dcPrimitiveCount * 4, workStreams[10]);
 	cudaEventRecord(events[10], workStreams[10]);
+
+	cudaStreamWaitEvent(workStreams[12], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dPixelBaseIdx, 0xFF, sizeof(int) * windowWidth * windowHeight, workStreams[12]);
 	cudaEventRecord(events[12], workStreams[12]);
 
 	// Clear queue counters
+	cudaStreamWaitEvent(workStreams[13], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dSubQueuePrimCount, 0, sizeof(unsigned) * MAX_BINNING_WAVE * BINNING_STAGE_BLOCK_SIZE, workStreams[13]);
 	cudaEventRecord(events[13], workStreams[13]);
+
+	cudaStreamWaitEvent(workStreams[14], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dTileQueuePrimCount, 0, sizeof(unsigned) * MAX_BIN_COUNT * MAX_TILE_COUNT * TILE_QUEUE_ENTRY, workStreams[14]);
 	cudaEventRecord(events[14], workStreams[14]);
 }
@@ -118,14 +139,13 @@ void RenderPipeline(Texture2D tex)
 
 	// ===== VERTEX SHADING STAGE =====
 	{
-		cudaStreamWaitEvent(renderingStream, events[1], 0); // Wait for OutVertexStream memset
 		int blocksPerGrid = (dcVertexCount + threadsPerBlock - 1) / threadsPerBlock;
 		VertexFetchAndShading << <blocksPerGrid, threadsPerBlock, 0, renderingStream >> > (dcVertexCount, dInVertexStream, dOutVertexStream);
 	}
 
 	// ===== PRIMITIVE ASSEMBLY STAGE =====
 	{
-		cudaStreamWaitEvent(renderingStream, events[5], 0); // Wait for SubTriangleCounter memcpy
+		CUDA_CHECK(cudaStreamWaitEvent(renderingStream, events[5], 0)); // Wait for SubTriangleCounter memcpy
 		cudaStreamWaitEvent(renderingStream, events[10], 0); // Wait for PrimitiveStream memset
 		int blocksPerGrid = (dcPrimitiveCount + threadsPerBlock - 1) / threadsPerBlock;
 		PrimitiveAssembly << <blocksPerGrid, threadsPerBlock, 0, renderingStream >> > (dcPrimitiveCount, dIndexStream, dOutVertexStream,
@@ -135,15 +155,17 @@ void RenderPipeline(Texture2D tex)
 	// ===== PRIMITIVE COMPACTION STAGE =====
 	{
 		PrimitiveCompaction(AVERAGE_PRIMITIVE_CULLED_COUNT * dcPrimitiveCount, dPrimitiveStream, dCompactedPrimitiveStream, dPrimitiveCounter, renderingStream);
-		cudaEventRecord(events[15], renderingStream);
+		cudaEventRecord(events[1], renderingStream);
 	}
 
 	// ===== TRIANGLE SETUP STAGE &  BINNING STAGE=====
 	{
 		unsigned compactedCount = std::max(1u * dcPrimitiveCount * AVERAGE_PRIMITIVE_CULLED_COUNT >> 1, 2048u);
 		int blocksPerGrid = (compactedCount + threadsPerBlock - 1) / threadsPerBlock;
-		cudaStreamWaitEvent(workStreams[15], events[15], 0); // Wait for PrimitiveCompaction
+		cudaStreamWaitEvent(workStreams[15], events[1], 0); // Wait for PrimitiveCompaction
 		TriangleSetup << <blocksPerGrid, threadsPerBlock, 0, workStreams[15] >> > (dPrimitiveCounter, dCompactedPrimitiveStream, dTriSetupData);
+		cudaEventRecord(events[15], workStreams[15]);
+
 		cudaStreamWaitEvent(renderingStream, events[13], 0); // Wait for SubQueuePrimCount memset
 		cudaStreamWaitEvent(renderingStream, events[2], 0); // Wait for TrunkAllocator memset
 		PrimitiveBinning << <blocksPerGrid, threadsPerBlock, 0, renderingStream >> > (dPrimitiveCounter, dCompactedPrimitiveStream, dTrunkAllocator,
@@ -158,6 +180,7 @@ void RenderPipeline(Texture2D tex)
 		cudaStreamWaitEvent(renderingStream, events[14], 0); // Wait for TileQueuePrimCount memset
 		cudaStreamWaitEvent(renderingStream, events[3], 0); // Wait for TileTrunkAllocator memset
 		cudaStreamWaitEvent(renderingStream, events[8], 0); // Wait for HiZ memset
+		cudaStreamWaitEvent(renderingStream, events[15], 0); // Wait for TriangleSetup
 		CoarseRasterizer << <blockSize, dim3(16, 16), 0, renderingStream >> > (dPrimitiveCounter, dSubQueueBaseIndex, dSubQueuePrimCount, dBinQueue,
 			dTriSetupData, dHiZ, dTileTrunkAllocator, dTileQueueBaseIndex, dTileQueuePrimCount, dTileQueue, windowWidth, windowHeight);
 	}
@@ -188,34 +211,23 @@ void RenderPipeline(Texture2D tex)
 		ROP << <gridSize, blockSize, 0, renderingStream >> > (dFragmentOutStream, dPixelBaseIdx, windowWidth, windowHeight, dDepthBuffer, dRenderTarget);
 	}
 
-	// ===== FRAMEBUFFER OUTPUT STAGE =====
-	{
-		int blocksPerGrid = (windowWidth * windowHeight + threadsPerBlock - 1) / threadsPerBlock;
-		cudaStreamWaitEvent(renderingStream, events[0], 0); // Wait for RT mapping
-		StreamingToFrameBuffer << <blocksPerGrid, threadsPerBlock, 0, renderingStream >> > (windowWidth * windowHeight, dRenderTarget, dFrameBuffer, windowWidth);
-	}
+
 }
 
-void BuildPipeline(GLuint rtBuffer, unsigned* depthBuffer,
+void BuildPipeline(unsigned char* cudaMappedRT, unsigned* depthBuffer,
 	const VertexVSIn* vertexStream, const uint32_t* indexStream,
 	int indexCount, int vertexCount, MatricesCBuffer* cb, Texture2D tex)
 {
 	CUDA_CHECK(cudaStreamBeginCapture(renderingStream, cudaStreamCaptureModeGlobal));
 
-	unsigned char* cudaMappedRT = nullptr;
-	CUDA_CHECK(cudaGLMapBufferObjectAsync((void**)&cudaMappedRT, rtBuffer, workStreams[0]));
-	cudaEventRecord(events[0], workStreams[0]);
-
-	SetGraphicsRoot(cudaMappedRT, depthBuffer, vertexStream, indexStream,
-		indexCount, vertexCount, cb, workStreams[1]);
-	cudaEventRecord(events[1], workStreams[1]);
-
+	cudaEventRecord(events[0], renderingStream);
+	SetGraphicsRoot(cudaMappedRT, depthBuffer,
+		vertexStream, indexStream,
+		indexCount, vertexCount, cb, renderingStream);
+	cudaEventRecord(events[1], renderingStream);
 	BeginFrame();
 	RenderPipeline(tex);
 	EndFrame();
-
-	CUDA_CHECK(cudaGLUnmapBufferObjectAsync(rtBuffer, renderingStream));
-
 
 	CUDA_CHECK(cudaStreamEndCapture(renderingStream, &renderGraph));
 	CUDA_CHECK(cudaGraphInstantiate(&graphInstance, renderGraph, nullptr, nullptr, 0));
@@ -225,8 +237,22 @@ void RasterizeWithGraph(GLuint rtBuffer, unsigned* depthBuffer,
 	const VertexVSIn* vertexStream, const uint32_t* indexStream,
 	int indexCount, int vertexCount, MatricesCBuffer* cb, Texture2D tex)
 {
+	cudaEvent_t renderPipeEvent;
+	CUDA_CHECK(cudaEventCreate(&renderPipeEvent));
+
 	CUDA_CHECK(cudaGraphLaunch(graphInstance, renderingStream));
-	CUDA_CHECK(cudaStreamSynchronize(renderingStream));
+	CUDA_CHECK(cudaEventRecord(renderPipeEvent, renderingStream));
+
+	unsigned char* cudaMappedRT = nullptr;
+	CUDA_CHECK(cudaGLMapBufferObjectAsync((void**)&cudaMappedRT, rtBuffer, glStream));
+
+	int blocksPerGrid = (windowWidth * windowHeight + 255) / 256;
+	cudaStreamWaitEvent(glStream, renderPipeEvent, 0); // Wait for RT mapping
+	StreamingToFrameBuffer << <blocksPerGrid, 256, 0, glStream >> > (windowWidth * windowHeight, dRenderTarget, cudaMappedRT, windowWidth);
+
+	CUDA_CHECK(cudaGLUnmapBufferObjectAsync(rtBuffer, glStream));
+
+	CUDA_CHECK(cudaStreamSynchronize(glStream));
 }
 
 /*
