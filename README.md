@@ -1,18 +1,16 @@
 # CUDA Rasterizer
 
-**University of Pennsylvania, CIS 5650: GPU Programming and Architecture**
+**Hangyu Zhang**
 
-* Hongyu Zhang
-* Tested on: Windows 11, RTX 3080 @ 1.71GHz 10GB, Intel Core i7-10700K @ 3.80GHz 32GB RAM
+A high-performance GPU rasterizer implemented entirely in CUDA, simulating modern hardware pipeline and features (Nvidia's tiled caching rendering pipeline)
 
-## Project Overview
+---
 
-A high-performance GPU rasterizer implemented entirely in CUDA, bypassing traditional graphics APIs to render 3D models using a modern tile-based deferred rendering pipeline. This project demonstrates low-level GPU programming expertise by building the complete graphics pipeline from scratch - from vertex transformation to pixel shading - using CUDA compute kernels.
-
-![Rendered Bunny Model](images/hero_render.png)
 *Stanford Bunny rendered at 1920x1080 with texture mapping and trilinear filtering*
 
-### Why Build a CUDA Rasterizer?
+![Rendered Bunny Model](./images/teaser.png)
+
+### Motivation - Why Build a CUDA Rasterizer?
 
 Traditional graphics APIs (OpenGL, DirectX, Vulkan) abstract away the rendering pipeline. This project peels back those layers to implement every stage manually on the GPU, providing deep insight into:
 - How modern GPUs organize rendering work into tiles for better cache efficiency
@@ -21,14 +19,38 @@ Traditional graphics APIs (OpenGL, DirectX, Vulkan) abstract away the rendering 
 - CUDA-OpenGL interop for zero-copy buffer sharing
 - Performance optimization through CUDA Graphs
 
+## Pipeline Architecture
+
+### Work flow
+
+![Workflow](./images/workflow.png)
+
+| Stage | Kernel | Description |
+|-------|--------|-------------|
+| **1** | `VertexFetchAndShading` | Transform vertices to clip space (MVP matrix) |
+| **2** | `PrimitiveAssembly` | Generate triangles, frustum clipping, backface culling |
+| **3** | `PrimitiveCompaction` | Stream compact to remove culled primitives |
+| **4** | `TriangleSetup` | Compute edge equations, depth equations, AABBs, interpolation coefficients |
+| **5** | `PrimitiveBinning` | Assign triangles to 128x128 screen bins |
+| **6** | `CoarseRasterizer` | Subdivide bins into 8x8 pixel tiles & compute tile cover and hierarchical z |
+| **7** | `FineRasterizerWIP` | Generate fragments in 2x2 quads for derivatives & compute pixel coverage for fragment in quad and early-z |
+| **8** | `PixelShader` | per fragment shading |
+| **9** | `ROP` | Depth test, blending, write to render target (preserve API order) |
+
 ## Key Features
 
-### Modern Tile-Based Rendering Architecture
-- **Two-Level Binning System**: Screen divided into 128x128 pixel bins, further subdivided into 8x8 pixel tiles
+### Modern Tile-based Rendering Architecture
+
+We implemented a rendering architecture between sort-middle and sort-last fragment (the primitives are redistributed by binning and before pixel shader), as the architecture after Maxwell, called TMR (Tiled caching immediate mode rendering). However, CUDA do not let us caching data on L2-cache, we have to write all the data back to the memory. Beside that, we simulated 
+
+* **Data flow**:  
+
+- **Two-Level Tiling System**: Screen divided into 128x128 pixel bins, further subdivided into 8x8 pixel tiles
 - **Deferred Shading Pipeline**: Separate geometry and shading passes for optimal occupancy
 - **Lock-Free Queues**: Atomic allocation for parallel primitive distribution to tiles
 
 ### Complete Graphics Pipeline
+
 - Programmable vertex and pixel shaders written in CUDA
 - **Full 6-Plane View Frustum Clipping**: Generates triangle fans for clipped polygons
 - **Backface Culling** with configurable winding order
@@ -37,52 +59,18 @@ Traditional graphics APIs (OpenGL, DirectX, Vulkan) abstract away the rendering 
 - **Early Depth Testing** with Hi-Z optimization support
 
 ### Advanced Texturing
+
 - **Trilinear Filtering** with automatic LOD calculation
 - CPU-side mipmap generation (4 mip levels)
 - DDX/DDY derivative computation using warp shuffle operations
 - Requires fragment quads (2x2) for derivative calculations
 
 ### CUDA Graph Optimization
+
 - 20-30% CPU overhead reduction through graph capture
 - Parallelizes 12+ independent buffer clear operations across streams
 - Single-submission execution model eliminates per-frame kernel launch overhead
 - Demonstrates advanced CUDA optimization techniques
-
-## Pipeline Architecture
-
-### Stage Breakdown
-
-```
-Vertex Buffer → [1] Vertex Shading → [2] Primitive Assembly → [3] Stream Compaction
-                                            ↓
-[7] Pixel Shading ← [6] Fine Rasterization ← [5] Coarse Rasterization ← [4] Triangle Setup
-         ↓                                           ↓
-    [8] ROP → [9] Framebuffer → Display        Binning (128x128)
-```
-
-| Stage | Kernel | Description |
-|-------|--------|-------------|
-| **1** | `VertexFetchAndShading` | Transform vertices to clip space (MVP matrix) |
-| **2** | `PrimitiveAssembly` | Generate triangles, frustum clipping, backface culling |
-| **3** | `PrimitiveCompactionKernel` | Stream compact to remove culled primitives |
-| **4** | `TriangleSetup` | Compute edge equations, AABBs, interpolation coefficients |
-| **5** | `PrimitiveBinning` | Assign triangles to 128x128 screen bins |
-| **6** | `CoarseRasterizer` | Subdivide bins into 8x8 pixel tiles |
-| **7** | `FineRasterizerWIP` | Generate fragments in 2x2 quads for derivatives |
-| **8** | `PixelShader` | Texture sampling with trilinear filtering |
-| **9** | `ROP` | Depth test, blending, write to render target |
-
-### Memory Layout
-
-```
-Screen (1920x1080)
-├─ Bins (15x8 grid of 128x128 regions)
-│  └─ Tiles (16x16 grid of 8x8 pixels per bin)
-└─ Buffers
-   ├─ dDepthBuffer: 24-bit normalized depth (1920x1080)
-   ├─ dRenderTarget: float4 HDR (1920x1080)
-   └─ dFragmentStream: Variable-sized fragment queue (~4x overdraw estimate)
-```
 
 ## Technical Deep Dives
 
@@ -260,94 +248,7 @@ cudaGraphLaunch(graphExec, stream);
 - **Reduce trilinear to bilinear**: 30% faster, minimal quality loss
 - **Group fragments by tile**: Improve texture cache hit rate
 
-## Build Instructions
 
-### Prerequisites
-
-- **OS**: Windows 10/11 (x64 only)
-- **Visual Studio**: 2022 with C++ desktop development workload
-- **CUDA Toolkit**: 12.0 or later
-- **GPU**: NVIDIA GPU with compute capability 8.6+ (RTX 30-series or better recommended)
-
-### Dependencies (Included)
-
-- GLFW 3.3 (static lib in `lib/`)
-- GLEW 2.1 (static lib in `lib/`)
-- GLM 0.9.9.8 (header-only in `glm/`)
-- STB libraries (header-only)
-- **External**: ParallelAlgorithm project for stream compaction
-
-### Build Steps
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/yourusername/CudaRasterizer.git
-   cd CudaRasterizer
-   ```
-
-2. **Open solution in Visual Studio**:
-   ```
-   CudaRasterizer.sln
-   ```
-
-3. **Configure project**:
-   - Ensure platform is set to **x64**
-   - Select **Debug** or **Release** configuration
-   - Verify CUDA integration is working (`.cu` files should have CUDA Build Customizations)
-
-4. **Build**:
-   - Press `Ctrl+Shift+B` or Build → Build Solution
-   - Binary output: `x64/Debug/CudaRasterizer.exe` or `x64/Release/CudaRasterizer.exe`
-
-5. **Run**:
-   - Ensure assets are in place:
-     - `objs/bunny.obj` - 3D model
-     - `textures/bunny_diffuse.png` - Diffuse texture
-   - Press `F5` to run with debugging or `Ctrl+F5` to run without debugging
-
-### Common Build Issues
-
-**Error: CUDA toolkit not found**
-- Install CUDA Toolkit 12.x from [NVIDIA Developer](https://developer.nvidia.com/cuda-downloads)
-- Restart Visual Studio after installation
-
-**Error: Cannot open `glew32s.lib`**
-- Verify libraries exist in `lib/` directory
-- Check project linker settings: Right-click project → Properties → Linker → General → Additional Library Directories
-
-**Error: `compute_86,sm_86` not supported**
-- Your GPU is older than RTX 30-series
-- Edit `CudaRasterizer.vcxproj`: Change `<CodeGeneration>compute_86,sm_86</CodeGeneration>` to your GPU's compute capability
-
-## Usage
-
-### Controls
-
-| Input | Action |
-|-------|--------|
-| **W/S** | Move camera forward/backward |
-| **A/D** | Strafe camera left/right |
-| **Q/E** | Move camera down/up |
-| **Left Mouse Drag** | Rotate camera (yaw/pitch) |
-| **ESC** | Exit application |
-
-### Switching Between Standard and Graph Mode
-
-Edit `main.cpp:260`:
-
-```cpp
-// Standard rendering
-Rasterize(mappedRTBuffer, gpCudaDepthStencil,
-          gpInVertexStream, gpIndexStream,
-          gIndexCount, gVertexCount, &cbVertex, gCudaTexture);
-
-// CUDA Graph rendering (uncomment to enable)
-// RasterizeWithGraph(mappedRTBuffer, gpCudaDepthStencil,
-//                    gpInVertexStream, gpIndexStream,
-//                    gIndexCount, gVertexCount, &cbVertex, gCudaTexture);
-```
-
-Note: Graph mode requires uncommenting `InitializeCudaGraph()` in initialization and `CleanupCudaGraph()` in cleanup.
 
 ## Future Enhancements
 

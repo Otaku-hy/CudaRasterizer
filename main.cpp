@@ -192,7 +192,7 @@ void Initialize()
 void LoadAssets()
 {
 	objl::Loader objLoader;
-	objLoader.LoadFile("./objs/bunny.obj");
+	objLoader.LoadFile("./objs/cow.obj");
 	//std::vector<VertexVSIn> rasterVertices = {
 	//	{ glm::vec4{-0.1f, -0.1f, 0.1f, 1.0f}, glm::vec3(0,0,1), glm::vec2(0,0)},
 	//	{ glm::vec4{-0.1f, 0.1f, 0.1f, 1.0f}, glm::vec3(0,0,1), glm::vec2(0,1)},
@@ -208,7 +208,7 @@ void LoadAssets()
 	gVertexCount = static_cast<uint32_t>(rasterVertices.size());
 	gIndexCount = static_cast<uint32_t>(rasterIndices.size());
 
-	gpCamera = std::make_unique<Camera>(glm::vec3(0.0f, 0.0f, 0.45f), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
+	gpCamera = std::make_unique<Camera>(glm::vec3(-0.02f, 0.4358f, 0.423f), glm::vec3(-0.058, -0.3876, -0.9199), glm::vec3(0, 1, 0), glm::radians(60.0f), static_cast<float>(width) / height);
 
 	CUDA_CHECK(cudaMalloc((void**)&gpCudaDepthStencil, sizeof(unsigned) * width * height));
 

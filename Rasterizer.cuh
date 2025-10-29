@@ -30,14 +30,14 @@ namespace CRPipeline
 	extern int* dPixelBaseIdx;
 
 	extern unsigned int* dSubTriangleCounter;
-	extern unsigned int* dTrunkAllocator;
-	extern unsigned int* dTileTrunkAllocator;
+	extern unsigned int* dChunkAllocator;
+	extern unsigned int* dTileChunkAllocator;
 	extern unsigned int* dQuadAllocator;
 	extern unsigned int* dBinSubQueueCounter;
 	extern unsigned int* dPrimitiveCounter;
 
-	extern unsigned int* hTileTrunkCount;
-	extern unsigned int* hBinTrunkCount;
+	extern unsigned int* hTileChunkCount;
+	extern unsigned int* hBinChunkCount;
 	extern unsigned int* hFragmentCount;
 	extern unsigned int* hdcPrimitiveCount;
 
@@ -56,7 +56,7 @@ namespace CRPipeline
 
 	extern __global__ void PrimitiveAssembly(int dimension, const uint32_t* indexStream, const VertexVSOut* vertexStream, Primitive* primitiveStream, int width, int height, unsigned int* subTriAllocationCounter);
 
-	extern __global__ void PrimitiveBinning(const unsigned int* pSize, const Primitive* primitiveStream, unsigned int* trunkAllocator,
+	extern __global__ void PrimitiveBinning(const unsigned int* pSize, const Primitive* primitiveStream, unsigned int* chunkAllocator,
 		unsigned int* subQueueBaseIndex, unsigned int* subQueuePrimCount, unsigned int* queue, int width, int height);
 
 	extern __global__ void TriangleSetup(const unsigned int* pSize, const Primitive* primitiveStream, TriangleSetupData* triPreparedStream);
@@ -64,7 +64,7 @@ namespace CRPipeline
 	extern __global__ void CoarseRasterizer(const unsigned int* primitiveCount /*input a compacted primitive Size*/, const unsigned int* subQueueBaseIndex,
 		const unsigned int* subQueuePrimCount, const unsigned* binQueue,
 		const TriangleSetupData* triSetupData, unsigned* hiZ,
-		unsigned* tileTrunkAllocator, unsigned* tileQueueBaseIndex, unsigned* tileQueuePrimCount, unsigned int* tileQueue,
+		unsigned* tileChunkAllocator, unsigned* tileQueueBaseIndex, unsigned* tileQueuePrimCount, unsigned int* tileQueue,
 		int width, int height);
 
 	extern __global__ void FineRasterizerWIP(const unsigned int* tileQueueBaseIndex, const unsigned int* tileQueuePrimCount, const unsigned int* tileQueue,

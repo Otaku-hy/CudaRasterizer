@@ -45,14 +45,14 @@ namespace CRPipeline//// pipeline signature
 	int* dPixelBaseIdx = nullptr;
 
 	unsigned int* dSubTriangleCounter = nullptr; //primitive count after culling before compaction
-	unsigned int* dTrunkAllocator = nullptr;
-	unsigned int* dTileTrunkAllocator = nullptr;
+	unsigned int* dChunkAllocator = nullptr;
+	unsigned int* dTileChunkAllocator = nullptr;
 	unsigned int* dQuadAllocator = nullptr;
 	unsigned int* dBinSubQueueCounter = nullptr;
 	unsigned int* dPrimitiveCounter = nullptr; //primitive count after compaction
 	//pined host memory
-	unsigned int* hTileTrunkCount = nullptr;
-	unsigned int* hBinTrunkCount = nullptr;
+	unsigned int* hTileChunkCount = nullptr;
+	unsigned int* hBinChunkCount = nullptr;
 	unsigned int* hFragmentCount = nullptr;
 	unsigned int* hdcPrimitiveCount = nullptr;
 
@@ -223,12 +223,12 @@ namespace CRPipeline
 	//	}
 	//}
 
-	__global__ void PrimitiveBinning(const unsigned int* pSize, const Primitive* primitiveStream, unsigned int* trunkAllocator, unsigned int* subQueueBaseIndex, unsigned int* subQueuePrimCount, unsigned int* queue, int width, int height)
+	__global__ void PrimitiveBinning(const unsigned int* pSize, const Primitive* primitiveStream, unsigned int* chunkAllocator, unsigned int* subQueueBaseIndex, unsigned int* subQueuePrimCount, unsigned int* queue, int width, int height)
 	{
 		__shared__ unsigned sBinTriangleCountWarp[BINNING_STAGE_BLOCK_SIZE / 32 /*warp count*/][MAX_BIN_COUNT + 1];
 		__shared__ unsigned sBinMask[BINNING_STAGE_BLOCK_SIZE / 32][MAX_BIN_COUNT + 1];
-		__shared__ unsigned sBinTrunkCount[32];
-		__shared__ unsigned int sTrunkAllocationBase;
+		__shared__ unsigned sBinChunkCount[32];
+		__shared__ unsigned int sChunkAllocationBase;
 
 		unsigned int size = *pSize;
 		if (size == 0) return;
@@ -291,21 +291,21 @@ namespace CRPipeline
 
 		//output for each bin queue
 		unsigned int subQueueSum = sBinTriangleCountWarp[(BINNING_STAGE_BLOCK_SIZE >> 5) - 1][threadIdx.x];
-		unsigned int trunkCount = (subQueueSum + QUEUE_TRUNK_SIZE_UINT - 1) / QUEUE_TRUNK_SIZE_UINT;
+		unsigned int chunkCount = (subQueueSum + QUEUE_CHUNK_SIZE_UINT - 1) / QUEUE_CHUNK_SIZE_UINT;
 		__syncthreads();
 
-		if (threadIdx.x < 32) sBinTrunkCount[threadIdx.x] = 0; // clear
+		if (threadIdx.x < 32) sBinChunkCount[threadIdx.x] = 0; // clear
 		__syncthreads();
-		unsigned int prefixTrunkCount = ScanInBlockExclusive(trunkCount, sBinTrunkCount);
+		unsigned int prefixChunkCount = ScanInBlockExclusive(chunkCount, sBinChunkCount);
 
 		if (threadIdx.x == 255)
 		{
-			unsigned int totalTrunkCount = prefixTrunkCount + trunkCount;
-			sTrunkAllocationBase = atomicAdd(trunkAllocator, totalTrunkCount);
+			unsigned int totalChunkCount = prefixChunkCount + chunkCount;
+			sChunkAllocationBase = atomicAdd(chunkAllocator, totalChunkCount);
 		}
 		__syncthreads();
 
-		unsigned int subQueueBase = (prefixTrunkCount + sTrunkAllocationBase) * QUEUE_TRUNK_SIZE_UINT;
+		unsigned int subQueueBase = (prefixChunkCount + sChunkAllocationBase) * QUEUE_CHUNK_SIZE_UINT;
 		subQueueBaseIndex[idx] = subQueueBase;
 		subQueuePrimCount[idx] = subQueueSum;
 
@@ -443,7 +443,7 @@ namespace CRPipeline
 	__global__ void CoarseRasterizer(const unsigned int* primitiveCount /*input a compacted primitive Size*/, const unsigned int* subQueueBaseIndex,
 		const unsigned int* subQueuePrimCount, const unsigned* binQueue,
 		const TriangleSetupData* triSetupData, unsigned* hiZ,
-		unsigned* tileTrunkAllocator, unsigned* tileQueueBaseIndex, unsigned* tileQueuePrimCount, unsigned int* tileQueue,
+		unsigned* tileChunkAllocator, unsigned* tileQueueBaseIndex, unsigned* tileQueuePrimCount, unsigned int* tileQueue,
 		int width, int height)
 	{
 		//persistent thread
@@ -452,7 +452,7 @@ namespace CRPipeline
 		__shared__ unsigned sTriData[COARSE_RASTER_BLOCK_SIZE];
 		__shared__ unsigned sHiZ[MAX_TILE_COUNT];
 		__shared__ unsigned sTileMask[COARSE_RASTER_BLOCK_SIZE >> 5][MAX_TILE_COUNT + 1];
-		__shared__ unsigned sTileTrunkCount[32];
+		__shared__ unsigned sTileChunkCount[32];
 
 		__shared__ unsigned int sFillCount;
 		__shared__ unsigned int sToFill;
@@ -461,7 +461,7 @@ namespace CRPipeline
 		__shared__ unsigned int sSubQueueCount;
 		__shared__ bool sNoMoreWork;
 
-		__shared__ unsigned int sTrunkAllocationBase;
+		__shared__ unsigned int sChunkAllocationBase;
 
 		//sub queue count = total primitive count / threads per block
 		const int trianglePerSubQueue = 256;
@@ -475,8 +475,8 @@ namespace CRPipeline
 		unsigned tileY = blockIdx.y * TILE_PER_ROW + threadIdx.y;
 		int tileIdx = tileX + tileY * TILE_PER_ROW * BIN_PER_ROW;
 
-		unsigned lastTrunkRemain = 0;
-		unsigned lastTrunkOffset = 0;
+		unsigned lastChunkRemain = 0;
+		unsigned lastChunkOffset = 0;
 		unsigned tileQueueEntryCount = 0;
 		int tileReadEntry = -1;
 
@@ -491,7 +491,7 @@ namespace CRPipeline
 			sLastReadOffset = 0;
 			sSubQueueCount = 0;
 			sNoMoreWork = false;
-			sTrunkAllocationBase = 0;
+			sChunkAllocationBase = 0;
 		}
 
 		while (true)
@@ -647,23 +647,23 @@ namespace CRPipeline
 				sum += warpSum;
 			}
 
-			if (tidx < 32) sTileTrunkCount[tidx] = 0; //clean the shared buffer
+			if (tidx < 32) sTileChunkCount[tidx] = 0; //clean the shared buffer
 			__syncthreads();
-			unsigned int allocCount = max((int)sum - (int)lastTrunkRemain, 0);
-			unsigned int tileTrunkCount = (allocCount + TILE_QUEUE_TRUNK_SIZE_UINT - 1) / TILE_QUEUE_TRUNK_SIZE_UINT;
-			unsigned int trunkBase = ScanInBlockInclusive(tileTrunkCount, sTileTrunkCount);
+			unsigned int allocCount = max((int)sum - (int)lastChunkRemain, 0);
+			unsigned int tileChunkCount = (allocCount + TILE_QUEUE_CHUNK_SIZE_UINT - 1) / TILE_QUEUE_CHUNK_SIZE_UINT;
+			unsigned int chunkBase = ScanInBlockInclusive(tileChunkCount, sTileChunkCount);
 			unsigned int laneId = get_lane_id();
 
 			if (tidx == 255)
 			{
-				sTrunkAllocationBase = atomicAdd(tileTrunkAllocator, trunkBase);
+				sChunkAllocationBase = atomicAdd(tileChunkAllocator, chunkBase);
 			}
 			__syncthreads();
 
-			if (tileTrunkCount > 0) // need new trunk
+			if (tileChunkCount > 0) // need new chunk
 			{
-				tileQueueBaseIndex[tileQueueEntryCount + tileIdx * TILE_QUEUE_ENTRY] = (sTrunkAllocationBase + trunkBase - tileTrunkCount) * TILE_QUEUE_TRUNK_SIZE_UINT;
-				tileQueuePrimCount[tileQueueEntryCount + tileIdx * TILE_QUEUE_ENTRY] = tileTrunkCount * TILE_QUEUE_TRUNK_SIZE_UINT;
+				tileQueueBaseIndex[tileQueueEntryCount + tileIdx * TILE_QUEUE_ENTRY] = (sChunkAllocationBase + chunkBase - tileChunkCount) * TILE_QUEUE_CHUNK_SIZE_UINT;
+				tileQueuePrimCount[tileQueueEntryCount + tileIdx * TILE_QUEUE_ENTRY] = tileChunkCount * TILE_QUEUE_CHUNK_SIZE_UINT;
 				tileQueueEntryCount++;
 			}
 
@@ -673,18 +673,18 @@ namespace CRPipeline
 				bool predicate = (intersectMask[i >> 5] & (1u << laneCounter)) != 0;
 				if (predicate) //need write
 				{
-					if (lastTrunkRemain == 0)  //switch to new trunk
+					if (lastChunkRemain == 0)  //switch to new chunk
 					{
 						tileReadEntry++;
-						lastTrunkOffset = tileQueueBaseIndex[tileReadEntry + tileIdx * TILE_QUEUE_ENTRY];
-						lastTrunkRemain = tileQueuePrimCount[tileReadEntry + tileIdx * TILE_QUEUE_ENTRY];
+						lastChunkOffset = tileQueueBaseIndex[tileReadEntry + tileIdx * TILE_QUEUE_ENTRY];
+						lastChunkRemain = tileQueuePrimCount[tileReadEntry + tileIdx * TILE_QUEUE_ENTRY];
 					}
 
-					unsigned int globalIdx = lastTrunkOffset;
+					unsigned int globalIdx = lastChunkOffset;
 					tileQueue[globalIdx] = sTriData[i];
 
-					lastTrunkOffset++;
-					lastTrunkRemain--;
+					lastChunkOffset++;
+					lastChunkRemain--;
 				}
 			}
 		}
@@ -692,7 +692,7 @@ namespace CRPipeline
 		int tileIdxA = tileX + tileY * TILE_PER_ROW * BIN_PER_ROW;
 		__syncthreads();
 		if (tileQueueEntryCount != 0)
-			tileQueuePrimCount[tileQueueEntryCount - 1 + tileIdxA * TILE_QUEUE_ENTRY] -= lastTrunkRemain;
+			tileQueuePrimCount[tileQueueEntryCount - 1 + tileIdxA * TILE_QUEUE_ENTRY] -= lastChunkRemain;
 		//write back hi-z cache into hi-z buffer
 		hiZ[binIdx * MAX_TILE_COUNT + tidx] = sHiZ[tidx];
 	}
@@ -784,8 +784,8 @@ namespace CRPipeline
 		__shared__ unsigned int sDepthCache[FINE_RASTER_TILE_PER_BLOCK][TILE_PIXEL_SIZE * TILE_PIXEL_SIZE]; // 8x8 pixel, * block process tile
 		__shared__ unsigned int sTriData[FINE_RASTER_TILE_PER_BLOCK][FINE_RASTER_PER_TILING_WORK_THREAD * 2]; // every warp one tile
 
-		__shared__ unsigned int sTileTrunkBegin[TILE_QUEUE_ENTRY * FINE_RASTER_TILE_PER_BLOCK];
-		__shared__ unsigned int sTileTrunkCount[TILE_QUEUE_ENTRY * FINE_RASTER_TILE_PER_BLOCK];
+		__shared__ unsigned int sTileChunkBegin[TILE_QUEUE_ENTRY * FINE_RASTER_TILE_PER_BLOCK];
+		__shared__ unsigned int sTileChunkCount[TILE_QUEUE_ENTRY * FINE_RASTER_TILE_PER_BLOCK];
 
 		__shared__ unsigned int sQuadAllocationBase[FINE_RASTER_TILE_PER_BLOCK];
 
@@ -804,41 +804,41 @@ namespace CRPipeline
 
 		if (get_lane_id() < TILE_QUEUE_ENTRY)
 		{
-			sTileTrunkBegin[get_lane_id() + threadIdx.y * TILE_QUEUE_ENTRY] = tileQueueBaseIndex[tileIdx * TILE_QUEUE_ENTRY + get_lane_id()];
-			sTileTrunkCount[get_lane_id() + threadIdx.y * TILE_QUEUE_ENTRY] = tileQueuePrimCount[tileIdx * TILE_QUEUE_ENTRY + get_lane_id()];
+			sTileChunkBegin[get_lane_id() + threadIdx.y * TILE_QUEUE_ENTRY] = tileQueueBaseIndex[tileIdx * TILE_QUEUE_ENTRY + get_lane_id()];
+			sTileChunkCount[get_lane_id() + threadIdx.y * TILE_QUEUE_ENTRY] = tileQueuePrimCount[tileIdx * TILE_QUEUE_ENTRY + get_lane_id()];
 		}
 		__syncthreads();
 
 		int readPos = 0;
 		int writePos = 0;
-		int currentTrunk = 0;
-		int currentTrunkOffset = 0;
+		int currentChunk = 0;
+		int currentChunkOffset = 0;
 
 		while (true)
 		{
 			unsigned long long coverage = 0ull;
 			unsigned quadCoverage = 0u;
 
-			while ((writePos - readPos) < FINE_RASTER_PER_TILING_WORK_THREAD && currentTrunk < TILE_QUEUE_ENTRY)
+			while ((writePos - readPos) < FINE_RASTER_PER_TILING_WORK_THREAD && currentChunk < TILE_QUEUE_ENTRY)
 			{
 				//fetch primitive index
-				int idx = currentTrunkOffset + threadIdx.x;
-				if (idx + 1 > sTileTrunkCount[currentTrunk + threadIdx.y * TILE_QUEUE_ENTRY]) idx = -1;
+				int idx = currentChunkOffset + threadIdx.x;
+				if (idx + 1 > sTileChunkCount[currentChunk + threadIdx.y * TILE_QUEUE_ENTRY]) idx = -1;
 
 				if (idx != -1)
 				{
-					unsigned int triIdx = tileQueue[sTileTrunkBegin[currentTrunk + threadIdx.y * TILE_QUEUE_ENTRY] + idx];
+					unsigned int triIdx = tileQueue[sTileChunkBegin[currentChunk + threadIdx.y * TILE_QUEUE_ENTRY] + idx];
 					unsigned int threadWritePos = (writePos + threadIdx.x) & 63;
 					sTriData[threadIdx.y][threadWritePos] = triIdx;
 				}
 
 				bool predicate = (idx != -1);
 				writePos += __popc(__ballot_sync(0xFFFFFFFF, predicate));
-				currentTrunkOffset += __popc(__ballot_sync(0xFFFFFFFF, predicate));
+				currentChunkOffset += __popc(__ballot_sync(0xFFFFFFFF, predicate));
 				if (__any_sync(0xFFFFFFFF, !predicate))
 				{
-					currentTrunk++;
-					currentTrunkOffset = 0;
+					currentChunk++;
+					currentChunkOffset = 0;
 				}
 			}
 
@@ -980,8 +980,9 @@ namespace CRPipeline
 		unsigned depth = __float_as_uint(svPosition.z);
 
 		//shading here
-		float4 color = SampleTexture2D(tex, make_float2(uv.x, uv.y));
-
+		//float4 color = SampleTexture2D(tex, make_float2(uv.x, uv.y));
+		float3 normal = fragmentStream[tidx].normal;
+		float4 color = make_float4(normal.x * 0.5 + 0.5, normal.y * 0.5 + 0.5, normal.z * 0.5 + 0.5, 1.0f);
 		output.color = make_float4(color.x, color.y, color.z, 1.0f);
 
 		//gamma correction
@@ -1118,13 +1119,13 @@ void InitializeCudaRasterizer(int width, int height)
 	CUDA_CHECK(cudaMalloc((void**)&dHiZ, sizeof(unsigned int) * MAX_BIN_COUNT * MAX_TILE_COUNT));
 
 	CUDA_CHECK(cudaMalloc((void**)&dSubTriangleCounter, sizeof(unsigned int)));
-	CUDA_CHECK(cudaMalloc((void**)&dTrunkAllocator, sizeof(unsigned int)));
-	CUDA_CHECK(cudaMalloc((void**)&dTileTrunkAllocator, sizeof(unsigned int)));
+	CUDA_CHECK(cudaMalloc((void**)&dChunkAllocator, sizeof(unsigned int)));
+	CUDA_CHECK(cudaMalloc((void**)&dTileChunkAllocator, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMalloc((void**)&dQuadAllocator, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMalloc((void**)&dPrimitiveCounter, sizeof(unsigned int)));
 
-	CUDA_CHECK(cudaMallocHost((void**)&hBinTrunkCount, sizeof(unsigned int)));
-	CUDA_CHECK(cudaMallocHost((void**)&hTileTrunkCount, sizeof(unsigned int)));
+	CUDA_CHECK(cudaMallocHost((void**)&hBinChunkCount, sizeof(unsigned int)));
+	CUDA_CHECK(cudaMallocHost((void**)&hTileChunkCount, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMallocHost((void**)&hFragmentCount, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMallocHost((void**)&hdcPrimitiveCount, sizeof(unsigned int)));
 
@@ -1170,13 +1171,13 @@ void CleanupCudaRasterizer()
 	CUDA_CHECK(cudaFree(dHiZ));
 
 	CUDA_CHECK(cudaFree(dSubTriangleCounter));
-	CUDA_CHECK(cudaFree(dTrunkAllocator));
-	CUDA_CHECK(cudaFree(dTileTrunkAllocator));
+	CUDA_CHECK(cudaFree(dChunkAllocator));
+	CUDA_CHECK(cudaFree(dTileChunkAllocator));
 	CUDA_CHECK(cudaFree(dQuadAllocator));
 	CUDA_CHECK(cudaFree(dPrimitiveCounter));
 
-	CUDA_CHECK(cudaFreeHost(hBinTrunkCount));
-	CUDA_CHECK(cudaFreeHost(hTileTrunkCount));
+	CUDA_CHECK(cudaFreeHost(hBinChunkCount));
+	CUDA_CHECK(cudaFreeHost(hTileChunkCount));
 	CUDA_CHECK(cudaFreeHost(hFragmentCount));
 	CUDA_CHECK(cudaFreeHost(hdcPrimitiveCount));
 
@@ -1197,8 +1198,8 @@ void CleanupCudaRasterizer()
 void BeginCudaFrame()
 {
 	// reset allocators
-	CUDA_CHECK(cudaMemset(dTrunkAllocator, 0, sizeof(unsigned int)));
-	CUDA_CHECK(cudaMemset(dTileTrunkAllocator, 0, sizeof(unsigned int)));
+	CUDA_CHECK(cudaMemset(dChunkAllocator, 0, sizeof(unsigned int)));
+	CUDA_CHECK(cudaMemset(dTileChunkAllocator, 0, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMemset(dQuadAllocator, 0, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMemset(dBinSubQueueCounter, 0, sizeof(unsigned int)));
 	CUDA_CHECK(cudaMemcpy(dSubTriangleCounter, hdcPrimitiveCount, sizeof(unsigned int), cudaMemcpyHostToDevice));
@@ -1252,7 +1253,7 @@ void Rasterize(unsigned char* outRenderTarget, unsigned* depthBuffer,
 		unsigned compactedCount = std::max(1u * dcPrimitiveCount * AVERAGE_PRIMITIVE_CULLED_COUNT >> 1, 2048u);
 		int blocksPerGrid = (compactedCount + threadsPerBlock - 1) / threadsPerBlock;
 		TriangleSetup << <blocksPerGrid, threadsPerBlock >> > (dPrimitiveCounter, dCompactedPrimitiveStream, dTriSetupData);
-		PrimitiveBinning << <blocksPerGrid, threadsPerBlock >> > (dPrimitiveCounter, dCompactedPrimitiveStream, dTrunkAllocator, dSubQueueBaseIndex, dSubQueuePrimCount, dBinQueue, windowWidth, windowHeight);
+		PrimitiveBinning << <blocksPerGrid, threadsPerBlock >> > (dPrimitiveCounter, dCompactedPrimitiveStream, dChunkAllocator, dSubQueueBaseIndex, dSubQueuePrimCount, dBinQueue, windowWidth, windowHeight);
 
 		// one block = one sub queue --- subQueueCount = blocksPerGrid;
 		// coarse raster only launch block in screen scissor plane
@@ -1263,7 +1264,7 @@ void Rasterize(unsigned char* outRenderTarget, unsigned* depthBuffer,
 		int yUpper = UPPER_BOUND(windowHeight, BIN_PIXEL_SIZE_LOG2);
 		dim3 blockSize(xUpper >> BIN_PIXEL_SIZE_LOG2, yUpper >> BIN_PIXEL_SIZE_LOG2);
 		CoarseRasterizer << <blockSize, dim3(16, 16) >> > (dPrimitiveCounter/*divide by trianglePerSubQueue*/, dSubQueueBaseIndex, dSubQueuePrimCount, dBinQueue,
-			dTriSetupData, dHiZ, dTileTrunkAllocator, dTileQueueBaseIndex, dTileQueuePrimCount, dTileQueue, windowWidth, windowHeight);
+			dTriSetupData, dHiZ, dTileChunkAllocator, dTileQueueBaseIndex, dTileQueuePrimCount, dTileQueue, windowWidth, windowHeight);
 
 		int tileXUpper = UPPER_BOUND(windowWidth, TILE_PIXEL_SIZE_LOG2) >> TILE_PIXEL_SIZE_LOG2;
 		int tileYUpper = UPPER_BOUND(windowHeight, TILE_PIXEL_SIZE_LOG2) >> TILE_PIXEL_SIZE_LOG2 >> 2;

@@ -19,10 +19,6 @@ This implementation uses CUDA Graphs to optimize the per-frame rendering pipelin
 3. Eliminating kernel launch overhead
 4. Enabling concurrent execution of independent operations
 
-Performance benefits:
-- ~10-30% reduction in CPU overhead from kernel launches
-- Parallel execution of 12+ independent memset operations
-- Optimized execution on the GPU via graph scheduling
 =========================================================================================
 */
 
@@ -78,11 +74,11 @@ void BeginFrame()
 
 	// Reset allocators
 	cudaStreamWaitEvent(workStreams[2], events[0], 0); // Wait for SetGraphicsRoot
-	CUDA_CHECK(cudaMemsetAsync(dTrunkAllocator, 0, sizeof(unsigned int), workStreams[2]));
+	CUDA_CHECK(cudaMemsetAsync(dChunkAllocator, 0, sizeof(unsigned int), workStreams[2]));
 	CUDA_CHECK(cudaEventRecord(events[2], workStreams[2]));
 
 	cudaStreamWaitEvent(workStreams[3], events[0], 0); // Wait for SetGraphicsRoot
-	CUDA_CHECK(cudaMemsetAsync(dTileTrunkAllocator, 0, sizeof(unsigned int), workStreams[3]));
+	CUDA_CHECK(cudaMemsetAsync(dTileChunkAllocator, 0, sizeof(unsigned int), workStreams[3]));
 	CUDA_CHECK(cudaEventRecord(events[3], workStreams[3]));
 
 	cudaStreamWaitEvent(workStreams[4], events[0], 0); // Wait for SetGraphicsRoot
@@ -167,8 +163,8 @@ void RenderPipeline(Texture2D tex)
 		cudaEventRecord(events[15], workStreams[15]);
 
 		cudaStreamWaitEvent(renderingStream, events[13], 0); // Wait for SubQueuePrimCount memset
-		cudaStreamWaitEvent(renderingStream, events[2], 0); // Wait for TrunkAllocator memset
-		PrimitiveBinning << <blocksPerGrid, threadsPerBlock, 0, renderingStream >> > (dPrimitiveCounter, dCompactedPrimitiveStream, dTrunkAllocator,
+		cudaStreamWaitEvent(renderingStream, events[2], 0); // Wait for ChunkAllocator memset
+		PrimitiveBinning << <blocksPerGrid, threadsPerBlock, 0, renderingStream >> > (dPrimitiveCounter, dCompactedPrimitiveStream, dChunkAllocator,
 			dSubQueueBaseIndex, dSubQueuePrimCount, dBinQueue, windowWidth, windowHeight);
 	}
 
@@ -178,11 +174,11 @@ void RenderPipeline(Texture2D tex)
 		int yUpper = UPPER_BOUND(windowHeight, BIN_PIXEL_SIZE_LOG2);
 		dim3 blockSize(xUpper >> BIN_PIXEL_SIZE_LOG2, yUpper >> BIN_PIXEL_SIZE_LOG2);
 		cudaStreamWaitEvent(renderingStream, events[14], 0); // Wait for TileQueuePrimCount memset
-		cudaStreamWaitEvent(renderingStream, events[3], 0); // Wait for TileTrunkAllocator memset
+		cudaStreamWaitEvent(renderingStream, events[3], 0); // Wait for TileChunkAllocator memset
 		cudaStreamWaitEvent(renderingStream, events[8], 0); // Wait for HiZ memset
 		cudaStreamWaitEvent(renderingStream, events[15], 0); // Wait for TriangleSetup
 		CoarseRasterizer << <blockSize, dim3(16, 16), 0, renderingStream >> > (dPrimitiveCounter, dSubQueueBaseIndex, dSubQueuePrimCount, dBinQueue,
-			dTriSetupData, dHiZ, dTileTrunkAllocator, dTileQueueBaseIndex, dTileQueuePrimCount, dTileQueue, windowWidth, windowHeight);
+			dTriSetupData, dHiZ, dTileChunkAllocator, dTileQueueBaseIndex, dTileQueuePrimCount, dTileQueue, windowWidth, windowHeight);
 	}
 
 	// ===== FINE RASTERIZATION STAGE =====
@@ -263,8 +259,8 @@ void RasterizeWithGraph(GLuint rtBuffer, unsigned* depthBuffer,
 PARALLELIZATION IMPROVEMENTS:
 
 Before (Sequential):
-  [42] cudaMemset(dTrunkAllocator)           ─┐
-  [43] cudaMemset(dTileTrunkAllocator)       ─┤
+  [42] cudaMemset(dChunkAllocator)           ─┐
+  [43] cudaMemset(dTileChunkAllocator)       ─┤
   [44] cudaMemset(dQuadAllocator)            ─┤
   [45] cudaMemcpy(dSubTriangleCounter)       ─┤
   [46] cudaMemset(dFragmentStream)           ─┤  12 sequential operations
@@ -306,16 +302,6 @@ LIMITATIONS:
 2. Cannot handle dynamic kernel launches (must fix max size)
 3. Conditional execution requires always-execute + early-exit pattern
 4. cudaMemcpyToSymbol may not be supported in older CUDA versions
-
-USAGE NOTES:
-
-- First frame will be slower (graph capture overhead)
-- Subsequent frames benefit from graph replay
-- Graph is reusable as long as:
-  * Buffer pointers don't change
-  * Kernel launch parameters are the same
-  * Window size doesn't change
-- To update parameters (e.g., MVP matrix), use cudaGraphExecUpdate()
 
 =========================================================================================
 */

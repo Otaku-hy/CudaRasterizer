@@ -177,6 +177,7 @@ inline __device__  float4 SampleTexture2D(const Texture2D tex, float2 uv)
 	float lod = min(max(0.5f * log2f(d),0.0f),3.0f);
 
 	int lod0 = floorf(lod);
+	//float4 color0 = SampleTexture2DLOD(tex, uv, 0);
 	float4 color0 = SampleTexture2DLOD(tex, uv, lod0);
 	float4 color1 = SampleTexture2DLOD(tex, uv, min(lod0 + 1, 3));
 
@@ -185,7 +186,7 @@ inline __device__  float4 SampleTexture2D(const Texture2D tex, float2 uv)
 	result.y = color0.y * (1.0f - factor) + color1.y * factor;
 	result.z = color0.z * (1.0f - factor) + color1.z * factor;
 	result.w = color0.w * (1.0f - factor) + color1.w * factor;
-
+	//result = color0;
 	return result;
 }
 
