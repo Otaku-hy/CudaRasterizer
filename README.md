@@ -10,9 +10,9 @@ A high-performance GPU rasterizer implemented entirely in CUDA, simulating moder
 
 *upper - opaque; bottom - OIT*
 
-![Rendered Bunny Model](./images/teaser.png)
+<img src="./images/teaser.png" style="zoom:25%;" />
 
-![OIT](./images/OIT.png)
+<img src="./images/OIT.png" style="zoom:25%;" />
 
 ### Motivation - Why Build a CUDA Rasterizer?
 
@@ -58,7 +58,7 @@ We implemented a sort-middle rendering architecture (the primitives are redistri
 
 As the figure above shows, because of the task reducing and redistributing system of the tile-based arch, it's smooth to both zoom in and out
 
-### Advanced CUDA Primitives & technique []
+### Advanced CUDA Primitives & technique [See Chapter Optimization & Performance Analysis]
 
 * Use **warp level functions** implemented a high performance block Size scan algorithm
 * Use **cooperative groups** implemented a one pass stream paction which allows compaction up to **500,000** primitives
@@ -80,7 +80,7 @@ left side: sampling with bilinear interpolation, right side: sampling with trili
 
 with trilinear interpolation, we get a less noisy texture (blurred) which dramatically increase rendering quality for objects at distance
 
-### CUDA Multi-Stream & Graph Optimization []
+### CUDA Multi-Stream & Graph Optimization [See Chapter Optimization & Performance Analysis]
 
 - use cudaStream & cudaGraph to capture a "pipeline object" for the rasterizer and reuse it every frame
 - reducing overhead of launch small kernels in the pipeline 
@@ -95,7 +95,9 @@ with trilinear interpolation, we get a less noisy texture (blurred) which dramat
 
 - **Resolution**: 1920x1080
 
-### Baseline Performance (tiled base method without optimizing)
+### Kernel Performance
+
+**Baseline Performance (tiled base method without optimizing)**
 
 ![before](./images/origin.png)
 
@@ -103,10 +105,12 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
 
 <details>   <summary>Optimization: CoarseRasterizer</summary>      As it has a small kernel size (a block for one bin), reducing register usage here makes no sense. Hence we increase the loop unrolling count, increasing instruction effectiveness.   </details>
 
-<details> <summary>Optimization: FineRasterizer</summary>We rewrite the queue read logic and fragment write back logic, making global read and write amortized inside the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.</details>
-
-<details> <summary>Optimization: FineRasterizer</summary> We rewrite the queue read logic and fragment write back logic, making global read and write amortized among the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.
+<details> 
+    <summary>Optimization: FineRasterizer</summary> 
+    We rewrite the queue read logic and fragment write back logic, making global read and write amortized among the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.
 </details>
+
+
 <details> 
     <summary>Optimization: PixelShader
     </summary>
@@ -116,7 +120,7 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
     <img src="./images/optimized_tex.png" style="zoom:25%;" />
     <br />
     The figure above shows our optimized data structure, see source code for more details
-
+<\details>
 
 <details> 
     <summary>Optimization: ROP Stage</summary>
@@ -126,81 +130,79 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
 
 With these optimization, we get a 31.7% improvement on performance:
 
-### Final Performance
+**Final Performance**
 
 ![after](./images/after.png)
 
 ### CUDA Graph Impact
 
-| Metric | Standard Path | CUDA Graph | Improvement |
+**Default Stream Performance**
+
+![graph](./images/graph.png)
+
+With all CUDA API calls (memset, memcpy, kernel...) on default stream (implicit synchronized), we can not leverage on the parallel power of GPU hardware and between CPU and GPU. As shown in the above figure, the GPU can process only one call at a time, and CPU have to wait for synchronizing to execute the next CUDA API. Besides, because our pipeline has several small task (~ 30us), the overhead of kernel launch dominated. Both of the factors cause a lower GPU busy rate during each frame. 
+
+<details>   <summary>Optimization: CUDA Graph</summary>  
+	First, instead of copy back from GPU to decide next kernel launch size, we launch fixed size block for each kernl, which not only eliminates costly device-to-host mem copy but enables the reuse of cuda graph each frame as well.
+</br>
+	Second, for inevitable host-to-device mem copy every frame (constants and buffer initialization), we use pinned memory and memcpyasync to make it fit into our cuda graph execution.
+</br>
+	We built a dependency graph for all tasks and uses different stream to process independent tasks with event record for stream joint.
+</br>
+	<img src="./images/DAG.jpg" style="zoom:10%;" />
+</br> dependency graph structure illustration
+</details>
+
+**Rewrite With Multi Stream & CudaGraph**
+
+![graph](./images/graph.png)
+
+**Performance analysis**:
+
+| Metric | Default Stream | CUDA Graph | Improvement |
 |--------|--------------|------------|-------------|
-| CPU Overhead | 450 μs | 320 μs | **-28.9%** |
-| GPU Time | 1407 μs | 1390 μs | -1.2% |
-| Total Frame Time | 1857 μs | 1710 μs | **-7.9%** |
+| CPU Time | 7.79ms         | 4.2ms | +85.48% |
+| GPU Time | 6.14ms         | 4.07ms | +50.85%     |
+| GPU Time for Rasterize Pipeline | 6.02ms         | 2.81ms | +114.23%    |
+| Total Frame Time | 7.79ms | 4.2ms      | +85.48% |
 
-### CUDA Graph Optimization
+With cuda graph, we see a dramatical improvement over frame rate (from 120 to 240). As the graph implementation optimizes the rendering pipeline by:
 
-CUDA Graphs reduce CPU overhead by capturing kernel launches into a reusable execution graph:
+* Capturing the entire frame workload as a reusable graph
+* Eliminating kernel launch overhead
+* Enabling concurrent execution of independent operations
 
-```cuda
-// RasterizerGraph.cu - First frame captures graph
-cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+## Limitation & Failure Case
 
-// 12 parallel memset operations across streams
-cudaMemsetAsync(dBuffer1, 0, size, stream1);
-cudaMemsetAsync(dBuffer2, 0, size, stream2);
-// ... etc
+**holes on model**
 
-// Sequential rendering kernels (data dependencies)
-VertexShading<<<grid, block, 0, stream>>>();
-PrimitiveAssembly<<<grid, block, 0, stream>>>();
-// ... rest of pipeline
+In release mode, there are some one pixel size holes on model. Since it's in release mode, we cannot use CUDA debugging to see what happened there. Just some speculation, it may caused by the precision of depth value - we store z-plane equation in float form and convert float depth to unsigned depth by multiply a large float, which can cause data precision problems when execute on different SMs at different time. 
 
-cudaStreamEndCapture(stream, &graph);
-cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
+![failure](./images/failure.png)
 
-// Subsequent frames just launch the graph
-cudaGraphLaunch(graphExec, stream);
-```
+the cursor points out some holes on the bunny model when rendering in pure color.
 
-**Performance Impact**:
+**cuda graph limit**
 
-- CPU overhead: -20-30% (measured with CPU profiler)
-- Frame time: Marginal improvement (GPU-bound)
-- Best use case: CPU-bound scenarios, many small kernels
+OpenGL interop (`cudaGraphicsMapResources`) cannot be captured in graphs. So we have to write map and unmap logic out of the graph every frame. As these task takes a lot time cpu time whiling keep gpu spare, the GPU still have a stall overhead waiting driver complete resouce mapping
 
-**Critical Limitation**: OpenGL interop (`cudaGraphicsMapResources`) **cannot** be captured in graphs. Solution: Render to staging buffer, then `cudaMemcpy` to PBO outside graph.
+**kernel limit**
 
-### Limitation & Failure Case
-
-**Fine Rasterization (27% of frame)** is the primary bottleneck. Optimization opportunities:
-1. **Hierarchical Z-buffer**: Skip tile rasterization if fully occluded
-2. **Increase tile size**: 8x8 tiles may be too small, causing overhead. Test 16x16.
-3. **Warp utilization**: Profile to ensure >50% warp occupancy
-
-**Pixel Shading (22.7%)** dominated by texture sampling. Mitigations:
-- **Texture cache optimization**: Pad textures to 128-byte alignment
-- **Reduce trilinear to bilinear**: 30% faster, minimal quality loss
-- **Group fragments by tile**: Improve texture cache hit rate
-
-
+* CUDA kernel cannot directly use the L2 cache from last kernel. So all buffers have to write back to global mem and then fetch by other kernels, which requires more bandwidth than real hardware pipeline.
+* Cooperative group' have a limitation on launched kernel block size, which makes our stream compaction cannot reach the theoretical maximum.
 
 ## Future Enhancements
 
-- [ ] **Hierarchical Z-Buffer (Hi-Z)**: Early rejection of occluded tiles
-- [ ] **Multiple Render Targets (MRT)**: G-buffer for deferred shading
-- [ ] **Compute Shader Pipeline**: Port to pure compute for Vulkan/DX12 comparison
-- [ ] **Multi-Draw Indirect**: Batch multiple objects without CPU intervention
-- [ ] **Compressed Textures**: BC7 support for reduced bandwidth
-- [ ] **MSAA**: Multi-sample anti-aliasing with coverage masks
-- [ ] **Dynamic Branching**: Uber-shader for multiple material types
+**Render target compression**: use 4:1 & 8:1 DCC for color and depth buffer, further reduce memory bandwidth for early/late-z and fragment write back 
 
+**Compressed Textures**: similar to rt compression, reduce bandwidth
 
+**Cuda Graph Caching**: like pipeline object caching, support rasterization with different settings and reduce overhead for capture new graph
 
 ## References
 
-- [NVIDIA CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
+- [Real-Time Rendering, Fourth Edition, Chapter 23](https://www.realtimerendering.com/)
 - [A trip through the Graphics Pipeline](https://fgiesen.wordpress.com/2011/07/09/a-trip-through-the-graphics-pipeline-2011-index/)
-- [Tile-Based Rendering](https://developer.arm.com/documentation/102662/0100/Tile-based-rendering)
-- [CUDA Graphs Introduction](https://developer.nvidia.com/blog/cuda-graphs/)
-- [GPU Gems 2: Stream Compaction](https://developer.nvidia.com/gpugems/gpugems2/part-vi-simulation-and-numerical-algorithms/chapter-39-parallel-prefix-sum-scan)
+- [tiled caching rendering](https://www.realworldtech.com/tile-based-rasterization-nvidia-gpus/)
+- [High-Performance Software Rasterization on GPUs](https://research.nvidia.com/sites/default/files/pubs/2011-08_High-Performance-Software-Rasterization/laine2011hpg_paper.pdf)
+- S. Molnar, M. Cox, D. Ellsworth and H. Fuchs, "A sorting classification of parallel rendering," in *IEEE Computer Graphics and Applications*, vol. 14, no. 4, pp. 23-32, July 1994, doi: 10.1109/38.291528. keywords: {Sorting;Geometry;Concurrent computing;Computational efficiency;Hardware;Feedforward systems;Pipelines;Aggregates;Costs;Application software},

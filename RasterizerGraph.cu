@@ -8,19 +8,6 @@
 #include "RasterUnitFunction.cuh"
 #include "RasterParallelAlgorithm.cuh"
 
-/*
-=========================================================================================
-CUDA GRAPH OPTIMIZED RASTERIZER
-=========================================================================================
-
-This implementation uses CUDA Graphs to optimize the per-frame rendering pipeline by:
-1. Parallelizing independent cudaMemset operations using streams
-2. Capturing the entire frame workload as a reusable graph
-3. Eliminating kernel launch overhead
-4. Enabling concurrent execution of independent operations
-
-=========================================================================================
-*/
 
 namespace
 {
@@ -97,7 +84,7 @@ void BeginFrame()
 	cudaStreamWaitEvent(workStreams[7], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dRenderTarget, 0, sizeof(float4) * windowHeight * windowWidth, workStreams[7]);
 	cudaEventRecord(events[7], workStreams[7]);
-	
+
 	cudaStreamWaitEvent(workStreams[8], events[0], 0); // Wait for SetGraphicsRoot
 	cudaMemsetAsync(dHiZ, 0xFF, sizeof(unsigned) * MAX_BIN_COUNT * MAX_TILE_COUNT, workStreams[8]);
 	cudaEventRecord(events[8], workStreams[8]);
@@ -250,58 +237,3 @@ void RasterizeWithGraph(GLuint rtBuffer, unsigned* depthBuffer,
 
 	CUDA_CHECK(cudaStreamSynchronize(glStream));
 }
-
-/*
-=========================================================================================
-							PERFORMANCE ANALYSIS
-=========================================================================================
-
-PARALLELIZATION IMPROVEMENTS:
-
-Before (Sequential):
-  [42] cudaMemset(dChunkAllocator)           ─┐
-  [43] cudaMemset(dTileChunkAllocator)       ─┤
-  [44] cudaMemset(dQuadAllocator)            ─┤
-  [45] cudaMemcpy(dSubTriangleCounter)       ─┤
-  [46] cudaMemset(dFragmentStream)           ─┤  12 sequential operations
-  [47] cudaMemset(dRenderTarget)             ─┤  Latency: 12 × (kernel launch + memset)
-  [48] cudaMemset(dHiZ)                      ─┤
-  [49] cudaMemset(dDepthBuffer)              ─┤
-  [50] cudaMemset(dPrimitiveStream)          ─┤
-  [51] cudaMemset(dOutVertexStream)          ─┤
-  [52] cudaMemset(dPixelBaseIdx)             ─┤
-  [53] cudaMemset(dSubQueuePrimCount)        ─┤
-  [54] cudaMemset(dTileQueuePrimCount)       ─┘
-
-After (Parallel):
-  [42-54] All 12 memsets on separate streams ─── Concurrent execution
-  Latency: 1 × (kernel launch + max(memset_time))
-
-  Speedup: ~8-12× for this section (depending on memset sizes)
-
-CUDA GRAPH BENEFITS:
-
-1. Kernel Launch Overhead Elimination:
-   - Without graphs: ~10-20μs per kernel launch × ~10 kernels = 100-200μs
-   - With graphs: Single graph launch ~5-10μs
-   - Savings: 90-190μs per frame
-
-2. Graph Scheduling Optimization:
-   - GPU can optimize execution order
-   - Better occupancy through lookahead scheduling
-   - Reduced CPU-GPU synchronization
-
-3. Expected Overall Performance Gain:
-   - For GPU-bound scenes: 5-10% improvement
-   - For CPU-bound scenes: 20-30% improvement
-   - Best case (many small kernels): 40-50% improvement
-
-LIMITATIONS:
-
-1. Graph capture adds one-time cost on first frame
-2. Cannot handle dynamic kernel launches (must fix max size)
-3. Conditional execution requires always-execute + early-exit pattern
-4. cudaMemcpyToSymbol may not be supported in older CUDA versions
-
-=========================================================================================
-*/
