@@ -105,10 +105,9 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
 
 <details>   <summary>Optimization: CoarseRasterizer</summary>      As it has a small kernel size (a block for one bin), reducing register usage here makes no sense. Hence we increase the loop unrolling count, increasing instruction effectiveness.   </details>
 
-<details> 
-    <summary>Optimization: FineRasterizer</summary> 
-    We rewrite the queue read logic and fragment write back logic, making global read and write amortized among the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.
-</details>
+<details><summary>Optimization: FineRasterizer</summary> 
+    We rewrite the queue read logic and fragment write back logic, making global read and write amortized among the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.</details>
+
 <details> 
     <summary>Optimization: PixelShader
     </summary>
@@ -122,10 +121,14 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
 
 <details> 
     <summary>Optimization: ROP Stage</summary>
-    For the same reason, we packed the structure for FragmentOut. Besides that, we use shared mem to eliminate local memory usage and reduce register usage, which makes the kernel's ideal occupancy reach 100%. <mark>But, unfortunately, increasing the occupancy lets more blocks stay alive on SM, which may lead to more eviction for cachelines, making L1 & L2 hit rate lower<\mark>. So, we do not see big improvements for this kernel. 
+    For the same reason, we packed the structure for FragmentOut. Besides that, we use shared mem to eliminate local memory usage and reduce register usage, which makes the kernel's ideal occupancy reach 100%. 
+    <mark>But, unfortunately, increasing the occupancy lets more blocks stay alive on SM, which may lead to more eviction for cachelines, making L1 & L2 hit rate lower<\mark>. 
+        So, we do not see big improvements for this kernel. 
 <\details>
 
-<details> <summary>Optimization: StreamingToFrameBuffer</summary>As it has a memory-bound nature, what we do is just making memory access coalescing.</details>
+<details> 
+    <summary>Optimization: StreamingToFrameBuffer</summary>As it has a memory-bound nature, what we do is just making memory access coalescing.
+</details>
 
 With these optimization, we get a 31.7% improvement on performance:
 
