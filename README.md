@@ -8,7 +8,11 @@ A high-performance GPU rasterizer implemented entirely in CUDA, simulating moder
 
 *Stanford Bunny rendered at 1920x1080 with texture mapping and trilinear filtering*
 
+*upper - opaque; bottom - OIT*
+
 ![Rendered Bunny Model](./images/teaser.png)
+
+![OIT](F:\CIS5650\CudaRasterizer\images\OIT.png)
 
 ### Motivation - Why Build a CUDA Rasterizer?
 
@@ -41,137 +45,99 @@ Traditional graphics APIs (OpenGL, DirectX, Vulkan) abstract away the rendering 
 
 ### Modern Tile-based Rendering Architecture
 
-We implemented a rendering architecture between sort-middle and sort-last fragment (the primitives are redistributed by binning and before pixel shader), as the architecture after Maxwell, called TMR (Tiled caching immediate mode rendering). However, CUDA do not let us caching data on L2-cache, we have to write all the data back to the memory. Beside that, we simulated 
+We implemented a sort-middle rendering architecture (the primitives are redistributed by binning), which is similar to Nvidia's Tile caching immediate mode rendering(TCR) after Maxwell architecture and AMD's Draw stream binning rasterization (DSBR).
 
-* **Data flow**:  
+(Since we cannot get the real implementation of both their architectures, I have to make some self experiment to guess their structure. We introduced a binning process and assigns each GPC(block) with a big tile on the screen. I believe it's more like DSBR - in contrast TCR assigns GPC with a set of small tiles in one big tile with a checkboard pattern)
 
-- **Two-Level Tiling System**: Screen divided into 128x128 pixel bins, further subdivided into 8x8 pixel tiles
-- **Deferred Shading Pipeline**: Separate geometry and shading passes for optimal occupancy
-- **Lock-Free Queues**: Atomic allocation for parallel primitive distribution to tiles
+- **Two-Level Tiling System beyond Fine Raster**: Screen divided into 128x128 pixel bins, a chunk of triangles will first test coverage with each bin on the screen. Further the bins are subdivided into 8x8 pixel tiles, testing triangle-tile intersection before queuing work for fine rasterization.. This system helps us balance the workload among different SMs and reduce the amount of fine rasterization.
+- **Complicated Z-test System**: We use a hi-z to test if a triangle is fully occluded by other in a coarse level and early-z to test if a fragment should pass into the PS stage. This strategy further reduces the overhead of fine rasterization and the amount of overdraw for pixel shader.
+- **Quad-based Pixel shader**: In fine rasterization, we output each fragment in a quad form (with 3 adjacent fragments). And parallelly process 8 quads in one warp for PS.
+- **Restrict API Order and OIT**: In order to make fragment write order obey primitive sequence, we do a caching and sorting for all fragments write to each pixel. The sort based on primitive ID and be replaced with depth in order to implemented a OIT. 
 
-### Complete Graphics Pipeline
+![zoom in and out](./images/zoom_in.gif)
 
-- Programmable vertex and pixel shaders written in CUDA
-- **Full 6-Plane View Frustum Clipping**: Generates triangle fans for clipped polygons
-- **Backface Culling** with configurable winding order
-- **Stream Compaction** to eliminate culled primitives before rasterization
-- **Perspective-Correct Interpolation** for vertex attributes
-- **Early Depth Testing** with Hi-Z optimization support
+As the figure above shows, because of the task reducing and redistributing system of the tile-based arch, it's smooth to both zoom in and out
+
+### Advanced CUDA Primitives & technique []
+
+* Use **warp level functions** implemented a high performance block Size scan algorithm
+* Use **cooperative groups** implemented a one pass stream paction which allows compaction up to **500,000** primitives
+* Efficient usage of shared mem and atomic operation
+  * reduce atomic allocation operations by one block/warp issue one (minimize stall counts)
+  * change per thread atomic access to shared mem (minimize stall cycles) 
+* Use **persistent threading** to reduce thread **divergence** and **unbalance** work load in a block
 
 ### Advanced Texturing
 
-- **Trilinear Filtering** with automatic LOD calculation
-- CPU-side mipmap generation (4 mip levels)
-- DDX/DDY derivative computation using warp shuffle operations
-- Requires fragment quads (2x2) for derivative calculations
+- **Trilinear Filtering** with automatic LOD calculation (based on quad info)
+- CPU-side mipmap generation
+- **DDX/DDY derivative** computation using warp shuffle operations
+- an optimized **tile linear storage** structure for texture
+
+![bilinear](.\images\sampling_bilinear.png) ![trilinear](.\images\sampling_trilinear.png)
+
+left side: sampling with bilinear interpolation, right side: sampling with trilinear interpolation
+
+with trilinear interpolation, we get a less noisy texture (blurred) which dramatically increase rendering quality for objects at distance
+
+### CUDA Multi-Stream & Graph Optimization []
+
+- use cudaStream & cudaGraph to capture a "pipeline object" for the rasterizer and reuse it every frame
+- reducing overhead of launch small kernels in the pipeline 
+- leverage the parallel capability of different GPU tasks (copy & kernel) and between CPU and GPU (async copy & launch)
+
+## Optimization & Performance Analysis
+
+### Test Scene
+- **Model**: Stanford Bunny (5000 triangles) Cow (5000 triangles)
+
+  **As the cooperative group's limitation on launched kernel block size, currently we cannot process model have more than 10k triangles. So we test our pipeline with model about 5000 triangles
+
+- **Resolution**: 1920x1080
+
+### Baseline Performance (tiled base method without optimizing)
+
+![before](./images/origin.png)
+
+As shown in the figure, the goal of optimization should focus on kernels "CoarseRasterizer", "FineRasterizer", "PixelShader", "ROP", and "StreamingToFrameBuffer" as they take much of the frame time.
+
+<details>   <summary>Optimization: CoarseRasterizer</summary>      As it has a small kernel size (a block for one bin), reducing register usage here makes no sense. Hence we increase the loop unrolling count, increasing instruction effectiveness.   </details>
+
+<details> <summary>Optimization: FineRasterizer</summary>We rewrite the queue read logic and fragment write back logic, making global read and write amortized inside the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.</details>
+
+<details> <summary>Optimization: FineRasterizer</summary> We rewrite the queue read logic and fragment write back logic, making global read and write amortized among the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.
+</details>
+<details> 
+    <summary>Optimization: PixelShader
+    </summary>
+    We optimize the fragment data structure, allowing each thread of the warp to read and write continuous 16-byte (float4) data in global mem. Secondly, as kernel arguments have to load to register from constant cache, when the parameter is large, the register may spill into local memory, which introduces memory stalls when accessing. We optimize the Texture2D structure and method to read from texture.
+    <br />
+    <img src="F:\CIS5650\CudaRasterizer\images\optimized_Frag.png" style="zoom:33%;" />
+    <img src="F:\CIS5650\CudaRasterizer\images\optimized_tex.png" style="zoom:25%;" />
+    <br />
+    The figure above shows our optimized data structure, see source code for more details
+
+<details> 
+    <summary>Optimization: ROP Stage</summary>
+    For the same reason, we packed the structure for FragmentOut. Besides that, we use shared mem to eliminate local memory usage and reduce register usage, which makes the kernel's ideal occupancy reach 100%. <mark>But, unfortunately, increasing the occupancy lets more blocks stay alive on SM, which may lead to more eviction for cachelines, making L1 & L2 hit rate lower<\mark>. So, we do not see big improvements for this kernel. 
+
+<details> <summary>Optimization: StreamingToFrameBuffer</summary>As it has a memory-bound nature, what we do is just making memory access coalescing.</details>
+
+With these optimization, we get a 31.7% improvement on performance:
+
+### Final Performance
+
+![after](F:\CIS5650\CudaRasterizer\images\after.png)
+
+### CUDA Graph Impact
+
+| Metric | Standard Path | CUDA Graph | Improvement |
+|--------|--------------|------------|-------------|
+| CPU Overhead | 450 μs | 320 μs | **-28.9%** |
+| GPU Time | 1407 μs | 1390 μs | -1.2% |
+| Total Frame Time | 1857 μs | 1710 μs | **-7.9%** |
 
 ### CUDA Graph Optimization
-
-- 20-30% CPU overhead reduction through graph capture
-- Parallelizes 12+ independent buffer clear operations across streams
-- Single-submission execution model eliminates per-frame kernel launch overhead
-- Demonstrates advanced CUDA optimization techniques
-
-## Technical Deep Dives
-
-### 1. Tile-Based Binning
-
-Modern GPUs use tiling to improve cache locality. My implementation uses a two-level hierarchy:
-
-```cuda
-// RasterConstant.h
-#define BIN_PIXEL_SIZE 128      // Bin: 128x128 pixels
-#define TILE_PIXEL_SIZE 8       // Tile: 8x8 pixels
-#define BINS_PER_ROW 16         // Support up to 2048x2048 screens
-```
-
-**Binning Stage** assigns primitives to bins based on triangle AABB:
-
-```cuda
-// Simplified binning logic (Rasterizer.cu)
-AABB screenAABB = ComputeTriangleAABB(v0, v1, v2);
-int minBinX = screenAABB.min.x / BIN_PIXEL_SIZE;
-int maxBinX = screenAABB.max.x / BIN_PIXEL_SIZE;
-// For each overlapping bin, atomically add primitive to bin queue
-for (int by = minBinY; by <= maxBinY; by++)
-    for (int bx = minBinX; bx <= maxBinX; bx++)
-        AtomicPushToBinQueue(by * BINS_PER_ROW + bx, primitiveID);
-```
-
-**Coarse Rasterization** further subdivides bins into tiles, testing triangle-tile intersection before queuing work for fine rasterization.
-
-### 2. View Frustum Clipping
-
-Unlike GPU hardware which clips in homogeneous coordinates, I implemented full polygon clipping:
-
-```cuda
-// RasterMathHelper.h:95 - ClippingWithPlane
-// Clips triangle against a plane, generating up to 2 output triangles
-__device__ int ClippingWithPlane(
-    const VertexVSOut* inVertices, int inCount,
-    VertexVSOut* outVertices, const glm::vec4& plane)
-{
-    // Cohen-Sutherland inspired clipping
-    // Generates new vertices at plane intersections
-    // Returns 0-6 vertices forming 0-2 triangles
-}
-```
-
-Each primitive is clipped against all 6 frustum planes in sequence, potentially expanding one triangle into a multi-triangle fan. This requires dynamic allocation:
-
-```cuda
-// Atomic allocation in primitive assembly
-int outIndex = atomicAdd(dPrimitiveCount, clippedTriangleCount);
-```
-
-### 3. Lock-Free Queue Management
-
-Binning and tiling use lock-free queues with trunk-based allocation to reduce atomic contention:
-
-```cuda
-// RasterConstant.h
-#define QUEUE_TRUNK_SIZE 256              // 256 bytes per trunk
-#define TILE_QUEUE_TRUNK_SIZE 2048        // 2KB per tile queue trunk
-
-// Atomic trunk allocation reduces contention vs per-item atomics
-__device__ void PushToQueue(Queue* queue, uint32_t item) {
-    int localIndex = threadIdx.x % TRUNK_SIZE;
-    if (localIndex == 0) {
-        // Leader thread allocates trunk for warp
-        trunkID = atomicAdd(&queue->trunkAllocator, 1);
-    }
-    trunkID = __shfl_sync(0xffffffff, trunkID, 0);
-    queue->trunks[trunkID].items[localIndex] = item;
-}
-```
-
-This reduces atomic operations from N (per-item) to N/TRUNK_SIZE (per-trunk), improving performance under high primitive counts.
-
-### 4. Texture Filtering with Warp Shuffles
-
-Trilinear filtering requires computing texture coordinate derivatives (ddx/ddy) for LOD selection. Since CUDA doesn't have built-in derivatives, I use warp shuffle to exchange data between neighboring fragments:
-
-```cuda
-// RasterUnitFunction.cuh:132 - SampleTexture2D
-__device__ float4 SampleTexture2D(Texture2D tex, float2 uv, int quadIndex) {
-    // Compute derivatives using warp shuffles (requires quads!)
-    float2 uvDX = abs(uv - __shfl_xor_sync(0xffffffff, uv, 1));
-    float2 uvDY = abs(uv - __shfl_xor_sync(0xffffffff, uv, 2));
-
-    // LOD = log2(max(ddx, ddy))
-    float lod = 0.5f * log2f(max(uvDX.x * texWidth, uvDY.y * texHeight));
-
-    // Trilinear: lerp between two mip levels
-    int mip0 = floor(lod), mip1 = ceil(lod);
-    float4 sample0 = BilinearSample(tex, uv, mip0);
-    float4 sample1 = BilinearSample(tex, uv, mip1);
-    return lerp(sample0, sample1, frac(lod));
-}
-```
-
-**Quad-based rasterization** is essential: fragments must be generated in 2x2 blocks to enable XOR shuffle patterns (1, 2) for horizontal/vertical neighbors.
-
-### 5. CUDA Graph Optimization
 
 CUDA Graphs reduce CPU overhead by capturing kernel launches into a reusable execution graph:
 
@@ -197,46 +163,14 @@ cudaGraphLaunch(graphExec, stream);
 ```
 
 **Performance Impact**:
+
 - CPU overhead: -20-30% (measured with CPU profiler)
 - Frame time: Marginal improvement (GPU-bound)
 - Best use case: CPU-bound scenarios, many small kernels
 
 **Critical Limitation**: OpenGL interop (`cudaGraphicsMapResources`) **cannot** be captured in graphs. Solution: Render to staging buffer, then `cudaMemcpy` to PBO outside graph.
 
-## Performance Analysis
-
-### Test Scene
-- **Model**: Stanford Bunny (34,817 triangles)
-- **Resolution**: 1920x1080
-- **Texture**: 2048x2048 diffuse map with 4 mip levels
-- **GPU**: NVIDIA RTX 3080 (10GB, SM 8.6)
-
-### Baseline Performance
-
-| Stage | Kernel Time (μs) | % of Frame |
-|-------|-----------------|-----------|
-| Vertex Shading | 45 | 3.2% |
-| Primitive Assembly + Clipping | 180 | 12.8% |
-| Stream Compaction | 35 | 2.5% |
-| Triangle Setup | 52 | 3.7% |
-| Binning | 95 | 6.7% |
-| Coarse Rasterization | 120 | 8.5% |
-| Fine Rasterization | 380 | 27.0% |
-| Pixel Shading | 320 | 22.7% |
-| ROP | 180 | 12.8% |
-| **Total GPU Time** | **~1407 μs** | **~710 FPS** |
-
-*Note: Replace with actual profiling data using Nsight Compute*
-
-### CUDA Graph Impact
-
-| Metric | Standard Path | CUDA Graph | Improvement |
-|--------|--------------|------------|-------------|
-| CPU Overhead | 450 μs | 320 μs | **-28.9%** |
-| GPU Time | 1407 μs | 1390 μs | -1.2% |
-| Total Frame Time | 1857 μs | 1710 μs | **-7.9%** |
-
-### Bottleneck Analysis
+### Limitation & Failure Case
 
 **Fine Rasterization (27% of frame)** is the primary bottleneck. Optimization opportunities:
 1. **Hierarchical Z-buffer**: Skip tile rasterization if fully occluded
@@ -260,32 +194,7 @@ cudaGraphLaunch(graphExec, stream);
 - [ ] **MSAA**: Multi-sample anti-aliasing with coverage masks
 - [ ] **Dynamic Branching**: Uber-shader for multiple material types
 
-## Project Structure
 
-```
-CudaRasterizer/
-├── Rasterizer.cu/h          # Main pipeline implementation
-├── RasterizerGraph.cu/h     # CUDA Graph optimized path
-├── RasterPipeHelper.h       # Data structures (vertex, primitive, fragment)
-├── RasterMathHelper.h       # Clipping, AABB, barycentric math
-├── RasterUnitFunction.cuh   # Texture sampling, derivatives
-├── RasterConstant.h         # Pipeline constants (tile sizes, etc.)
-├── RasterParallelAlgorithm.cu/h  # Stream compaction
-├── main.cpp                 # OpenGL setup, asset loading, main loop
-├── Camera.cpp/h             # Camera controls
-├── ObjLoader.h              # Wavefront OBJ parser
-├── glUtility.h              # OpenGL helpers
-├── ErrorCheck.h             # CUDA error checking macros
-└── objs/, textures/         # Assets
-```
-
-## Acknowledgements
-
-- **Patrick Cozzi** and **Shehzan Mohammed** for CUDA Rasterizer framework
-- **University of Pennsylvania CIS 5650**: GPU Programming and Architecture course
-- **NVIDIA**: CUDA programming guide and performance optimization resources
-- **Stanford Computer Graphics Laboratory**: Bunny model
-- **Syoyo Fujita**: OBJ loader implementation
 
 ## References
 
@@ -294,9 +203,3 @@ CudaRasterizer/
 - [Tile-Based Rendering](https://developer.arm.com/documentation/102662/0100/Tile-based-rendering)
 - [CUDA Graphs Introduction](https://developer.nvidia.com/blog/cuda-graphs/)
 - [GPU Gems 2: Stream Compaction](https://developer.nvidia.com/gpugems/gpugems2/part-vi-simulation-and-numerical-algorithms/chapter-39-parallel-prefix-sum-scan)
-
----
-
-**License**: This is an educational project for University of Pennsylvania CIS 5650. Not licensed for commercial use.
-
-**Contact**: [your-email@example.com](mailto:your-email@example.com) | [LinkedIn](https://www.linkedin.com/in/yourprofile) | [Portfolio](https://yourwebsite.com)
