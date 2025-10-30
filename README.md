@@ -12,7 +12,7 @@ A high-performance GPU rasterizer implemented entirely in CUDA, simulating moder
 
 ![Rendered Bunny Model](./images/teaser.png)
 
-![OIT](.\images\OIT.png)
+![OIT](./images/OIT.png)
 
 ### Motivation - Why Build a CUDA Rasterizer?
 
