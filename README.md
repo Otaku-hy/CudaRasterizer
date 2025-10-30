@@ -107,7 +107,6 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
 
 <details><summary>Optimization: FineRasterizer</summary> 
     We rewrite the queue read logic and fragment write back logic, making global read and write amortized among the warp, reducing warp divergence. Interestingly, by making every 4 threads write a quad back, we increase memory coalescing and reduce the register overhead of loop unrolling, which also increases occupancy. Besides that, we increase our block size from 32 to 256, let every 32 threads (a warp) process one tile and the whole block process 4 tiles simultaneously. This dramatically increases occupancy, hiding read latency and eliminating the tail effect.</details>
-
 <details> 
     <summary>Optimization: PixelShader
     </summary>
@@ -117,14 +116,16 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
     <img src="./images/optimized_tex.png" style="zoom:25%;" />
     <br />
     The figure above shows our optimized data structure, see source code for more details
-<\details>
+</details>
 
 <details> 
     <summary>Optimization: ROP Stage</summary>
     For the same reason, we packed the structure for FragmentOut. Besides that, we use shared mem to eliminate local memory usage and reduce register usage, which makes the kernel's ideal occupancy reach 100%. 
-    <mark>But, unfortunately, increasing the occupancy lets more blocks stay alive on SM, which may lead to more eviction for cachelines, making L1 & L2 hit rate lower<\mark>. 
+    <mark>But, unfortunately, increasing the occupancy lets more blocks stay alive on SM, which may lead to more eviction for cachelines, making L1 & L2 hit rate lower.
+    </mark> 
         So, we do not see big improvements for this kernel. 
-<\details>
+</details>
+
 
 <details> 
     <summary>Optimization: StreamingToFrameBuffer</summary>As it has a memory-bound nature, what we do is just making memory access coalescing.
@@ -146,14 +147,15 @@ With all CUDA API calls (memset, memcpy, kernel...) on default stream (implicit 
 
 <details>   <summary>Optimization: CUDA Graph</summary>  
 	First, instead of copy back from GPU to decide next kernel launch size, we launch fixed size block for each kernl, which not only eliminates costly device-to-host mem copy but enables the reuse of cuda graph each frame as well.
-</br>
+<br />
 	Second, for inevitable host-to-device mem copy every frame (constants and buffer initialization), we use pinned memory and memcpyasync to make it fit into our cuda graph execution.
-</br>
+<br />
 	We built a dependency graph for all tasks and uses different stream to process independent tasks with event record for stream joint.
-</br>
+<br />
 	<img src="./images/DAG.jpg" style="zoom:10%;" />
-</br> dependency graph structure illustration
+<br /> dependency graph structure illustration
 </details>
+
 
 **Rewrite With Multi Stream & CudaGraph**
 
