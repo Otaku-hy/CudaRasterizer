@@ -74,7 +74,7 @@ As the figure above shows, because of the task reducing and redistributing syste
 - **DDX/DDY derivative** computation using warp shuffle operations
 - an optimized **tile linear storage** structure for texture
 
-![bilinear](.\images\sampling_bilinear.png) ![trilinear](.\images\sampling_trilinear.png)
+![bilinear](./images/sampling_bilinear.png) ![trilinear](./images/sampling_trilinear.png)
 
 left side: sampling with bilinear interpolation, right side: sampling with trilinear interpolation
 
@@ -112,10 +112,11 @@ As shown in the figure, the goal of optimization should focus on kernels "Coarse
     </summary>
     We optimize the fragment data structure, allowing each thread of the warp to read and write continuous 16-byte (float4) data in global mem. Secondly, as kernel arguments have to load to register from constant cache, when the parameter is large, the register may spill into local memory, which introduces memory stalls when accessing. We optimize the Texture2D structure and method to read from texture.
     <br />
-    <img src="F:\CIS5650\CudaRasterizer\images\optimized_Frag.png" style="zoom:33%;" />
-    <img src="F:\CIS5650\CudaRasterizer\images\optimized_tex.png" style="zoom:25%;" />
+    <img src="./images/optimized_Frag.png" style="zoom:33%;" />
+    <img src="./images/optimized_tex.png" style="zoom:25%;" />
     <br />
     The figure above shows our optimized data structure, see source code for more details
+
 
 <details> 
     <summary>Optimization: ROP Stage</summary>
@@ -127,7 +128,7 @@ With these optimization, we get a 31.7% improvement on performance:
 
 ### Final Performance
 
-![after](F:\CIS5650\CudaRasterizer\images\after.png)
+![after](./images/after.png)
 
 ### CUDA Graph Impact
 
