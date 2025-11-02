@@ -2,7 +2,7 @@
 
 **Hangyu Zhang**
 
-A high-performance GPU rasterizer implemented entirely in CUDA, simulating modern hardware pipeline and features (Nvidia's tiled caching rendering pipeline)
+A high-performance GPU rasterizer implemented entirely in CUDA, simulating modern hardware pipeline and features (Nvidia's tiled caching rendering pipeline and AMD's draw stream binning rasterization)
 
 ---
 
